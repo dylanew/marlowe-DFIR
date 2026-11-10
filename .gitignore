@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Evidence and data: never commit real evidence or large datasets.
+# Only small, redistributable demo data belongs in data/sample/.
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.manifest.jsonl
+
+# Secrets and local config
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
