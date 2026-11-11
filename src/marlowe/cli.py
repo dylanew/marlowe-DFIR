@@ -1,0 +1,104 @@
+"""Command-line interface.
+
+marlowe generate --out data/sample        # write a synthetic auth.log + labels
+marlowe analyse data/sample/auth.log --year 2026 --labels data/sample/auth_labels.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+from marlowe.pipeline import analyse_auth_log
+from marlowe.synthetic import generate_auth_log
+
+
+def _cmd_generate(args: argparse.Namespace) -> None:
+    out = Path(args.out)
+    log = generate_auth_log(
+        start=datetime.fromisoformat(args.start), days=args.days, seed=args.seed
+    )
+    log.write(out / "auth.log", out / "auth_labels.csv")
+    print(f"Wrote {len(log.events)} lines to {out / 'auth.log'} (labels: auth_labels.csv)")
+
+
+def _fmt(m: dict) -> str:
+    s = f"precision {m['precision']:.2f}  recall {m['recall']:.2f}  F1 {m['f1']:.2f}  "
+    s += f"(TP {m['tp']}, FP {m['fp']}, FN {m['fn']})"
+    if "average_precision" in m:
+        s += f"  AP {m['average_precision']:.2f}"
+    return s
+
+
+def _cmd_analyse(args: argparse.Namespace) -> None:
+    result = analyse_auth_log(
+        args.log,
+        manifest_path=args.manifest,
+        year=args.year,
+        tz=args.tz,
+        labels_path=args.labels,
+        window=args.window,
+        train_fraction=args.train_fraction,
+        contamination=args.contamination,
+    )
+    ev = result.evidence
+    print(f"Evidence {ev.evidence_id}  sha256={ev.sha256}  ({ev.size_bytes} bytes)")
+    print("\nParsed events:")
+    print(result.parse_summary.to_string())
+    print(
+        f"\nWindows: {len(result.train_windows)} train / {len(result.windows)} test "
+        f"(cutoff {result.cutoff:%Y-%m-%d %H:%M} UTC)"
+    )
+
+    if result.metrics:
+        print("\nTest-period evaluation (window level):")
+        for name, m in result.metrics.items():
+            print(f"  {name:<17} {_fmt(m)}")
+        print("\nIncidents in the test period:")
+        print(result.incidents.to_string(index=False))
+
+    findings = result.findings()
+    print(f"\n{len(findings)} flagged windows. Top 10:")
+    with pd.option_context("display.max_colwidth", 80, "display.width", 200):
+        show = findings.head(10).copy()
+        show["lines"] = show["line_nos"].map(lambda n: f"{n[0]}-{n[-1]}" if len(n) > 1 else n[0])
+        print(show[["src_ip", "window_start", "rule_reasons", "if_reasons", "lines"]].to_string())
+
+    if args.findings:
+        Path(args.findings).parent.mkdir(parents=True, exist_ok=True)
+        findings.to_csv(args.findings, index=False)
+        print(f"\nAll findings written to {args.findings}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="marlowe", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    gen = sub.add_parser("generate", help="Generate a synthetic labelled auth.log")
+    gen.add_argument("--out", default="data/sample")
+    gen.add_argument("--start", default="2026-10-05")
+    gen.add_argument("--days", type=int, default=14)
+    gen.add_argument("--seed", type=int, default=42)
+    gen.set_defaults(func=_cmd_generate)
+
+    ana = sub.add_parser("analyse", help="Analyse an auth.log for anomalies")
+    ana.add_argument("log")
+    ana.add_argument("--year", type=int, required=True, help="year of the first log line")
+    ana.add_argument("--tz", default="UTC", help="timezone of the logging host's clock")
+    ana.add_argument("--labels", help="ground-truth labels CSV (enables evaluation)")
+    ana.add_argument("--manifest", default="data/processed/evidence.manifest.jsonl")
+    ana.add_argument("--findings", default="data/processed/findings.csv")
+    ana.add_argument("--window", default="10min")
+    ana.add_argument("--train-fraction", type=float, default=0.6)
+    ana.add_argument("--contamination", type=float, default=0.02)
+    ana.set_defaults(func=_cmd_analyse)
+
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
