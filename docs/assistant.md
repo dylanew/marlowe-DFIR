@@ -82,21 +82,53 @@ The label is required on purpose. Without it, an evidence question answered from
 
 **What the grounding check does not do:** it confirms that cited evidence *exists and was seen*, not that the model *interpreted* it correctly. An answer can cite real lines and still draw a wrong conclusion. That is why the investigator stays in the loop.
 
-## The noir persona
+## The personality slider
 
-Marlowe is named after Raymond Chandler's detective, so it can optionally talk like one. `--noir` on `marlowe chat`, or the **Noir voice** switch in the web app, appends a short persona prompt (`PERSONA_PROMPT` in `prompts.py`) after the rules.
+Marlowe is named after Raymond Chandler's detective, so it can talk like one, to a degree you choose. The **Personality** slider in the web app, or `--persona N` on `marlowe chat`, picks one of five voices (`PERSONA_LEVELS` in `prompts.py`):
+
+| Level | Name | Voice |
+|---|---|---|
+| 0 | Plain | No persona: the rules prompt alone. The control. |
+| 1 | Dry | Understated professional, at most one wry remark. |
+| 2 | Marlowe | The original persona, word for word: laconic, world-weary, a simile or two. The web app's default; `--noir` is short for this. |
+| 3 | Hard-boiled | First-person narration, short punchy sentences, a little period slang. |
+| 4 | Full noir | Deliberately over the top: rain, smoke and a simile in nearly every sentence. The stress test. |
 
 Design choices:
 
 - **Tone only.** The persona may colour the short answer and the interpretation. The evidence section stays plain: citations, IPs, usernames, timestamps and counts are written exactly as the tools returned them.
-- **Rules first.** The persona comes after the rules and says that it never overrides them. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
+- **Same rules at every level.** Each voice is appended after an identical rules prompt and repeats that the rules win. A test checks this, so a difference between levels can only come from the voice. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
 - **Original voice.** The prompt asks for the style, not quotations from the novels.
-- **Measured, not assumed.** The persona has its own version (`PERSONA_VERSION`), recorded in the audit log. To check it costs nothing in grounding, run the benchmark twice and compare:
+- **Measured, not assumed.** The audit log records `persona_level` and `PERSONA_VERSION` (2 since the slider; level 2's wording is unchanged from version 1).
+
+### Benchmarking the slider
+
+The question is a dose-response one: **does grounding get worse as the character gets stronger, and from which level?** Run the same questions at every level:
 
 ```bash
-python scripts/benchmark_models.py llama3.1:8b --out data/processed/bench_plain.csv
-python scripts/benchmark_models.py llama3.1:8b --noir --out data/processed/bench_noir.csv
+python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4 --out data/processed/bench_persona.csv
 ```
+
+It asks 8 questions per level (`QUESTIONS` in `marlowe/evaluation/persona.py`): the 5 from the model benchmark, plus "was root compromised?", one about an IP that isn't in the log (the right answer is that it isn't there), and one general question (the right answer keeps the "General guidance" label). For each answer it records:
+
+- **Grounding**, first try and after the retry, using the same check as the app.
+- **Correctness** on facts the synthetic ground truth gives us, such as naming the brute-force IP and that it got in as root. Questions with no known answer are left out of this rate rather than counted as right.
+- **Voice**: similes, first person and period vocabulary per 100 words, outside the evidence section. If the voice score doesn't rise with the slider, the model ignored the persona and "no accuracy cost" means nothing.
+- **Evidence leaks**: similes or period words *inside* the evidence section, which every level forbids.
+
+Rates come with Wilson 95% intervals. With 8 questions, one answer is 12 percentage points, and 8 out of 8 is consistent with a true rate as low as 0.68, so only a large difference between levels is a real one. At temperature 0 the answers barely vary between runs, so for more data add questions rather than repeats; `--repeats N --temperature 0.7` measures run-to-run variation instead.
+
+The voice measures are crude text statistics, not a judgement of the writing. That is deliberate: they are transparent, deterministic and unit tested, which an LLM judge would not be.
+
+Results (to be filled in from a live run):
+
+| Model | Level | First-try grounded | Final grounded | Correct | Voice score | Evidence leaks | Median s |
+|---|---|---|---|---|---|---|---|
+| llama3.1:8b | 0 Plain | | | | | | |
+| llama3.1:8b | 1 Dry | | | | | | |
+| llama3.1:8b | 2 Marlowe | | | | | | |
+| llama3.1:8b | 3 Hard-boiled | | | | | | |
+| llama3.1:8b | 4 Full noir | | | | | | |
 
 ## Choosing a model
 

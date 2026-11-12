@@ -48,9 +48,15 @@ Follow-ups identified by the error analysis:
 
 A Streamlit app (`marlowe web`) over the same pipeline and assistant: overview with evaluation metrics, findings table with drill-down to raw lines, timeline charts, and an Ask Marlowe chat that shows the tools used and the grounding check on every answer. Streamlit was chosen over Open WebUI so that findings, charts and chat sit in one interface and Marlowe's safeguards (tool loop, grounding check, audit log) stay in our code.
 
-## Step 3e: Philip Marlowe persona and noir theme (done; benchmark pending)
+## Step 3e: Philip Marlowe persona and noir theme (done)
 
-An optional noir voice for the assistant, in tone only, with the evidence section kept plain. Versioned separately (`PERSONA_VERSION`, recorded in the audit log) so it can be benchmarked on and off and the personality shown not to cost accuracy. The web app also gets a noir theme and CSS smoke effects.
+An optional noir voice for the assistant, in tone only, with the evidence section kept plain. Versioned separately (`PERSONA_VERSION`, recorded in the audit log) so it can be benchmarked and the personality shown not to cost accuracy. The web app also gets a noir theme and CSS smoke effects.
+
+## Step 3f: Personality slider and its benchmark (built; live run pending)
+
+- The on/off persona becomes a five-level slider, 0 Plain to 4 Full noir. The rules are identical at every level (tested), so only the voice varies
+- A dose-response benchmark (`--levels 0 1 2 3 4`): grounding, correctness on known facts, and how much voice each answer actually has, with Wilson 95% intervals
+- Next: run it on llama3.1:8b, put the table and a chart in `docs/assistant.md`, and decide the default level from the result
 
 ## Step 4: Portfolio presentation
 

@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from marlowe.assistant.ollama import DEFAULT_MODEL, DEFAULT_URL
+from marlowe.assistant.prompts import DEFAULT_PERSONA_LEVEL, PERSONA_LEVELS
 from marlowe.pipeline import analyse_auth_log
 from marlowe.synthetic import generate_auth_log
 
@@ -96,7 +97,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     result = analyse_auth_log(
         args.log, manifest_path=args.manifest, year=args.year, tz=args.tz, window=args.window
     )
-    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit, persona=args.noir)
+    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit, persona=args.persona)
     print(
         f"Evidence {result.evidence.evidence_id} loaded. Model: {args.model}. "
         f"Every answer is logged to {args.audit}."
@@ -176,8 +177,23 @@ def main(argv: list[str] | None = None) -> None:
     chat.add_argument("--manifest", default="data/processed/evidence.manifest.jsonl")
     chat.add_argument("--audit", default="data/processed/assistant_audit.jsonl")
     chat.add_argument("--window", default="10min")
-    chat.add_argument(
-        "--noir", action="store_true", help="answer in Marlowe's noir voice (tone only)"
+    voice = chat.add_mutually_exclusive_group()
+    voice.add_argument(
+        "--persona",
+        type=int,
+        choices=sorted(PERSONA_LEVELS),
+        default=0,
+        metavar="LEVEL",
+        help="personality slider, tone only: "
+        + ", ".join(f"{n} {name}" for n, name in PERSONA_LEVELS.items())
+        + " (default 0)",
+    )
+    voice.add_argument(
+        "--noir",
+        dest="persona",
+        action="store_const",
+        const=DEFAULT_PERSONA_LEVEL,
+        help=f"shorthand for --persona {DEFAULT_PERSONA_LEVEL}",
     )
     chat.set_defaults(func=_cmd_chat)
 

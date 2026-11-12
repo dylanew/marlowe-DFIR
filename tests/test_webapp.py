@@ -119,13 +119,17 @@ def test_smoke_loader_escapes_message_and_respects_reduced_motion():
     assert "pointer-events:none" in effects.DRIFTING_SMOKE
 
 
-def test_noir_toggle_switches_the_persona(app):
+def test_personality_slider_sets_the_persona_level(app):
     app.session_state["chat_client"] = FakeClient([])
     app.run()
-    assert app.session_state["analyst"].persona is True
-    next(t for t in app.toggle if t.label == "Noir voice").set_value(False).run()
+    assert app.session_state["analyst"].persona_level == 2  # the original noir voice
+    slider = next(s for s in app.select_slider if s.label == "Personality")
+    slider.set_value(0).run()
     assert not app.exception
+    assert app.session_state["analyst"].persona_level == 0
     assert app.session_state["analyst"].persona is False
+    next(s for s in app.select_slider if s.label == "Personality").set_value(4).run()
+    assert app.session_state["analyst"].persona_level == 4
 
 
 def test_newest_first_keeps_each_question_with_its_answer():

@@ -30,7 +30,13 @@ from pathlib import Path
 from typing import Any
 
 from marlowe.assistant.ollama import ChatClient
-from marlowe.assistant.prompts import PERSONA_VERSION, PROMPT_VERSION, system_prompt
+from marlowe.assistant.prompts import (
+    PERSONA_LEVELS,
+    PERSONA_VERSION,
+    PROMPT_VERSION,
+    resolve_persona_level,
+    system_prompt,
+)
 from marlowe.assistant.tools import AnalysisTools
 
 # Any mention of "line N" / "lines N-M, K", whatever brackets surround it.
@@ -347,7 +353,7 @@ class Analyst:
         max_steps: int = 8,
         max_retries: int = 1,
         audit_path: str | Path | None = None,
-        persona: bool = False,
+        persona: bool | int = False,
     ):
         self.client = client
         self.tools = tools
@@ -358,13 +364,22 @@ class Analyst:
         self._n_ok = 0
         self._n_ok_before = 0  # successful tool results from earlier questions
         self.audit_path = Path(audit_path) if audit_path else None
-        self.persona = persona
-        self.history: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(persona)}]
+        # A personality-slider level, 0 (plain) to 4 (full noir). True/False
+        # from the old on/off switch map to the default level and 0.
+        self.persona_level = resolve_persona_level(persona)
+        self.history: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt(self.persona_level)}
+        ]
         self.referenced_lines: set[int] = set()
         self.referenced_ranges: set[tuple[int, int]] = set()
         self.confirmed_absent: set[str] = set()
         self._question = ""
         self.seen_times: set[str] = set()
+
+    @property
+    def persona(self) -> bool:
+        """True if any persona is on (level 1 or above)."""
+        return self.persona_level > 0
 
     def _run_tools_loop(self, records: list[ToolCallRecord]) -> tuple[str, int, bool]:
         """Let the model call tools until it answers in text. Returns (text, steps, hit_limit)."""
@@ -486,7 +501,9 @@ class Analyst:
             "evidence_id": self.tools.result.evidence.evidence_id,
             "model": answer.model,
             "prompt_version": PROMPT_VERSION,
-            "persona_version": PERSONA_VERSION if self.persona else None,
+            "persona_version": PERSONA_VERSION if self.persona_level else None,
+            "persona_level": self.persona_level,
+            "persona_name": PERSONA_LEVELS[self.persona_level],
             "question": answer.question,
             "tool_calls": [asdict(c) for c in answer.tool_calls],
             "answer": answer.text,
