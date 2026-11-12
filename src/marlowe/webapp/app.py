@@ -27,7 +27,7 @@ from marlowe.assistant import AnalysisTools, Analyst, OllamaClient, OllamaError
 from marlowe.assistant.ollama import DEFAULT_MODEL, DEFAULT_URL
 from marlowe.pipeline import AnalysisResult, analyse_auth_log
 from marlowe.synthetic import generate_auth_log
-from marlowe.webapp import views
+from marlowe.webapp import effects, views
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA = Path("data")
@@ -109,6 +109,18 @@ with st.sidebar:
     else:
         default = next((i for i, m in enumerate(models) if m.startswith(DEFAULT_MODEL)), 0)
         model = st.selectbox("Model", models, index=default)
+
+    st.divider()
+    noir = st.toggle(
+        "Noir voice",
+        value=True,
+        help="Marlowe answers in the voice of a 1930s private eye. Tone only: "
+        "evidence, citations and the grounding check are unchanged.",
+    )
+    atmosphere = st.toggle("Atmosphere", value=True, help="Occasional drifting smoke.")
+
+if atmosphere:
+    st.markdown(effects.DRIFTING_SMOKE, unsafe_allow_html=True)
 
 try:
     result = run_analysis(str(log_path), int(year), tz, str(labels) if labels else None)
@@ -208,7 +220,8 @@ with timeline:
                 "kind:N",
                 title=None,
                 scale=alt.Scale(
-                    domain=["success", "failure / invalid user"], range=["#2f9e44", "#d64545"]
+                    domain=["success", "failure / invalid user"],
+                    range=[views.COLOURS["success"], views.COLOURS["failure"]],
                 ),
                 legend=alt.Legend(orient="top"),
             ),
@@ -229,7 +242,10 @@ with timeline:
             y=alt.Y("anomaly score:Q"),
             color=alt.Color(
                 "status:N",
-                scale=alt.Scale(domain=["normal", "flagged"], range=["#9aa5b1", "#d64545"]),
+                scale=alt.Scale(
+                    domain=["normal", "flagged"],
+                    range=[views.COLOURS["normal"], views.COLOURS["flagged"]],
+                ),
                 legend=alt.Legend(orient="top", title=None),
             ),
             size=alt.Size("failed:Q", title="failed logins", legend=None),
@@ -250,10 +266,13 @@ with ask:
     if models is None and "chat_client" not in st.session_state:
         st.info("Start Ollama and reload the page to ask questions.")
     else:
-        key = (evidence.evidence_id, model)
+        key = (evidence.evidence_id, model, noir)
         if st.session_state.get("analyst_key") != key:
             st.session_state.analyst = Analyst(
-                get_client(model, ollama_url), AnalysisTools(result), audit_path=AUDIT
+                get_client(model, ollama_url),
+                AnalysisTools(result),
+                audit_path=AUDIT,
+                persona=noir,
             )
             st.session_state.analyst_key = key
             st.session_state.chat = []
@@ -278,12 +297,18 @@ with ask:
         if question := st.chat_input(prompt):
             st.session_state.chat.append({"role": "user", "text": question})
             show(st.session_state.chat[-1])
-            with st.spinner("Marlowe is examining the evidence..."):
-                try:
-                    a = st.session_state.analyst.ask(question)
-                except OllamaError as exc:
-                    st.error(str(exc))
-                    st.stop()
+            waiting = st.empty()
+            waiting.markdown(
+                effects.smoke_loader("Marlowe is examining the evidence..."),
+                unsafe_allow_html=True,
+            )
+            try:
+                a = st.session_state.analyst.ask(question)
+            except OllamaError as exc:
+                waiting.empty()
+                st.error(str(exc))
+                st.stop()
+            waiting.empty()
             entry = {
                 "role": "assistant",
                 "text": a.text,

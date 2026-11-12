@@ -66,6 +66,22 @@ Each answer is followed by the tools the model called and the result of the grou
 
 **What the grounding check does not do:** it confirms that cited evidence *exists and was seen*, not that the model *interpreted* it correctly. An answer can cite real lines and still draw a wrong conclusion. That is why the investigator stays in the loop.
 
+## The noir persona
+
+Marlowe is named after Raymond Chandler's detective, so it can optionally talk like one. `--noir` on `marlowe chat`, or the **Noir voice** switch in the web app, appends a short persona prompt (`PERSONA_PROMPT` in `prompts.py`) after the rules.
+
+Design choices:
+
+- **Tone only.** The persona may colour the short answer and the interpretation. The evidence section stays plain: citations, IPs, usernames, timestamps and counts are written exactly as the tools returned them.
+- **Rules first.** The persona comes after the rules and says that it never overrides them. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
+- **Original voice.** The prompt asks for the style, not quotations from the novels.
+- **Measured, not assumed.** The persona has its own version (`PERSONA_VERSION`), recorded in the audit log. To check it costs nothing in grounding, run the benchmark twice and compare:
+
+```bash
+python scripts/benchmark_models.py llama3.1:8b --out data/processed/bench_plain.csv
+python scripts/benchmark_models.py llama3.1:8b --noir --out data/processed/bench_noir.csv
+```
+
 ## Choosing a model
 
 The default is `llama3.1:8b` (override with `--model` or `MARLOWE_MODEL`). On 16 GB of RAM, aim for roughly 7–8B parameter models at 4-bit quantisation. The model **must support tool calling**: check the "tools" tag on the model's page at ollama.com/library.

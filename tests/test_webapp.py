@@ -106,3 +106,22 @@ def test_app_chat_shows_grounding_badge(app, analysis):
     assert any("top finding" in m.value for m in app.markdown)
     assert any("Grounding check passed" in s.value for s in app.success)
     assert (Path("data/processed/assistant_audit.jsonl")).exists()
+
+
+def test_smoke_loader_escapes_message_and_respects_reduced_motion():
+    from marlowe.webapp import effects
+
+    html = effects.smoke_loader("<b>working</b>")
+    assert "&lt;b&gt;working&lt;/b&gt;" in html and "<b>" not in html
+    for css in (effects.SMOKE_LOADER, effects.DRIFTING_SMOKE):
+        assert "prefers-reduced-motion" in css
+    assert "pointer-events:none" in effects.DRIFTING_SMOKE
+
+
+def test_noir_toggle_switches_the_persona(app):
+    app.session_state["chat_client"] = FakeClient([])
+    app.run()
+    assert app.session_state["analyst"].persona is True
+    next(t for t in app.toggle if t.label == "Noir voice").set_value(False).run()
+    assert not app.exception
+    assert app.session_state["analyst"].persona is False

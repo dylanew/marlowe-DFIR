@@ -1,0 +1,34 @@
+# Marlowe's noir theme. Streamlit reads this file when `marlowe web` is run
+# from the repository root. Change any colour here; no Python needed.
+# All options: `streamlit config show`, under [theme].
+
+[theme]
+base = "dark"
+# Amber, like whisky under a desk lamp. Buttons, toggles, active tab.
+primaryColor = "#d4a24c"
+# Nearly black, slightly warm.
+backgroundColor = "#14120f"
+# Widgets, tables, code blocks.
+secondaryBackgroundColor = "#211d18"
+# Old paper.
+textColor = "#e8e1d3"
+borderColor = "#3a342c"
+dataframeHeaderBackgroundColor = "#2a251f"
+linkColor = "#e0b867"
+redColor = "#d0604a"
+greenColor = "#9fb57f"
+yellowColor = "#e0b867"
+# Typewriter headings. Courier ships with macOS and Windows; anything else
+# falls back to the system monospace font.
+headingFont = "Courier Prime, Courier New, Courier, monospace"
+headingFontWeights = [700, 700, 600]
+font = "sans-serif"
+codeFont = "monospace"
+baseRadius = "small"
+
+[theme.sidebar]
+backgroundColor = "#0e0c0a"
+secondaryBackgroundColor = "#1a1713"
+
+[browser]
+gatherUsageStats = false

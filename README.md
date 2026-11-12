@@ -22,6 +22,7 @@ Every finding Marlowe reports should trace back to a computed result and the sou
 | EDA and evaluation notebook | Done |
 | Local LLM analyst via Ollama: read-only tools, line citations, grounding check, audit log | Done, tested; benchmarked on llama3.1:8b |
 | Web app (Streamlit): overview, findings drill-down, timeline charts, chat with grounding badge | Done, tested headlessly |
+| Noir persona (tone only, switchable) and noir theme | Done, tested; persona benchmark pending |
 
 ## Quick start
 
@@ -72,13 +73,15 @@ pip install -e ".[web]"
 marlowe web
 ```
 
-This opens `http://localhost:8501`, bound to this machine only. Pick the synthetic sample or upload an `auth.log`. The Overview, Findings and Timeline tabs work without Ollama; Ask Marlowe needs it running.
+Run it from the repository root so Streamlit picks up the noir theme in `.streamlit/config.toml` (edit the colours there; no Python needed). This opens `http://localhost:8501`, bound to this machine only. Pick the synthetic sample or upload an `auth.log`. The Overview, Findings and Timeline tabs work without Ollama; Ask Marlowe needs it running.
 
 ![Marlowe web app, overview tab](docs/img/web-overview.png)
 
 The Findings tab lists every flagged window with the reasons from both detectors, and shows the raw log lines behind any finding. `F1` in the table is the same `F1` Marlowe refers to in chat. The Timeline tab plots hourly authentication activity and the anomaly score of every window. Uploads are stored read-only under `data/raw/uploads/`, named by their hash, and registered in the evidence manifest like any other evidence.
 
 ![Timeline tab](docs/img/web-timeline.png)
+
+Two switches in the sidebar: **Noir voice** has Marlowe answer like a 1930s Los Angeles private eye (in tone only: citations, IPs and counts stay exact and the grounding check is unchanged), and **Atmosphere** turns on a faint bank of smoke that drifts across the page about once a minute. While Marlowe works, a curl of smoke rises from a cigarette ember. Both animations are pure CSS, never block clicks, and switch off if your OS is set to reduce motion. On the command line, add `--noir` to `marlowe chat`.
 
 ### Use the library
 

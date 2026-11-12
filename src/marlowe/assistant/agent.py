@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from marlowe.assistant.ollama import ChatClient
-from marlowe.assistant.prompts import PROMPT_VERSION, SYSTEM_PROMPT
+from marlowe.assistant.prompts import PERSONA_VERSION, PROMPT_VERSION, system_prompt
 from marlowe.assistant.tools import AnalysisTools
 
 # Any mention of "line N" / "lines N-M, K", whatever brackets surround it.
@@ -199,6 +199,7 @@ class Analyst:
         max_steps: int = 8,
         max_retries: int = 1,
         audit_path: str | Path | None = None,
+        persona: bool = False,
     ):
         self.client = client
         self.tools = tools
@@ -209,7 +210,8 @@ class Analyst:
         self._n_ok = 0
         self._n_ok_before = 0  # successful tool results from earlier questions
         self.audit_path = Path(audit_path) if audit_path else None
-        self.history: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.persona = persona
+        self.history: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(persona)}]
         self.referenced_lines: set[int] = set()
 
     def _run_tools_loop(self, records: list[ToolCallRecord]) -> tuple[str, int, bool]:
@@ -312,6 +314,7 @@ class Analyst:
             "evidence_id": self.tools.result.evidence.evidence_id,
             "model": answer.model,
             "prompt_version": PROMPT_VERSION,
+            "persona_version": PERSONA_VERSION if self.persona else None,
             "question": answer.question,
             "tool_calls": [asdict(c) for c in answer.tool_calls],
             "answer": answer.text,

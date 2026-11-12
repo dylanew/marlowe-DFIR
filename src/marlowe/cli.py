@@ -96,7 +96,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     result = analyse_auth_log(
         args.log, manifest_path=args.manifest, year=args.year, tz=args.tz, window=args.window
     )
-    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit)
+    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit, persona=args.noir)
     print(
         f"Evidence {result.evidence.evidence_id} loaded. Model: {args.model}. "
         f"Every answer is logged to {args.audit}."
@@ -176,6 +176,9 @@ def main(argv: list[str] | None = None) -> None:
     chat.add_argument("--manifest", default="data/processed/evidence.manifest.jsonl")
     chat.add_argument("--audit", default="data/processed/assistant_audit.jsonl")
     chat.add_argument("--window", default="10min")
+    chat.add_argument(
+        "--noir", action="store_true", help="answer in Marlowe's noir voice (tone only)"
+    )
     chat.set_defaults(func=_cmd_chat)
 
     web = sub.add_parser("web", help="Open the Marlowe web app in your browser")

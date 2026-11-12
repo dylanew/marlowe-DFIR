@@ -265,3 +265,24 @@ def test_follow_up_can_use_earlier_tool_results(analysis):
     analyst.ask("what happened first?")
     second = analyst.ask("say that again")
     assert second.verification.passed  # no new tool call needed for a follow-up
+
+
+def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
+    from marlowe.assistant.prompts import SYSTEM_PROMPT, system_prompt
+
+    assert system_prompt() == SYSTEM_PROMPT
+    noir = system_prompt(persona=True)
+    assert noir.startswith(SYSTEM_PROMPT)  # rules first, voice after
+    assert "never overrides the rules" in noir
+
+    audit = tmp_path / "audit.jsonl"
+    plain = Analyst(FakeClient([final("x")] * 2), AnalysisTools(analysis), audit_path=audit)
+    voiced = Analyst(
+        FakeClient([final("x")] * 2), AnalysisTools(analysis), audit_path=audit, persona=True
+    )
+    assert plain.history[0]["content"] == SYSTEM_PROMPT
+    assert voiced.history[0]["content"] == noir
+    plain.ask("q")
+    voiced.ask("q")
+    records = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert [r["persona_version"] for r in records] == [None, "1"]

@@ -15,6 +15,15 @@ from marlowe.pipeline import AnalysisResult
 
 AUTH_TYPES = ["auth_success", "auth_failure", "invalid_user"]
 
+# Chart colours, matched to the noir theme in .streamlit/config.toml. Muted
+# for the routine, rust red for anything that needs a look.
+COLOURS = {
+    "success": "#9fb57f",
+    "failure": "#d0604a",
+    "normal": "#6f675b",
+    "flagged": "#d0604a",
+}
+
 
 def save_upload(data: bytes, name: str, upload_dir: str | Path) -> Path:
     """Store an uploaded file as a read-only evidence copy, named by its hash.
