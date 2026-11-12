@@ -5,7 +5,8 @@ Run from the repository root, with Ollama running and the models pulled:
     python scripts/benchmark_models.py llama3.1:8b qwen2.5:7b mistral-nemo
 
 For every model and question it records latency, the number of tool calls,
-whether the grounding check passed, and whether the answer names the IP
+whether it fetched raw log lines (not just computed summaries), whether the
+grounding check passed, and whether the answer names the IP
 behind the top finding. Results go to data/processed/model_benchmark.csv,
 and a summary table is printed.
 
@@ -41,6 +42,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("models", nargs="+")
     parser.add_argument("--out", default="data/processed/model_benchmark.csv")
+    parser.add_argument(
+        "--audit",
+        default="data/processed/benchmark_audit.jsonl",
+        help="full record of every answer (tool calls, both attempts, grounding)",
+    )
+    parser.add_argument(
+        "--retries", type=int, default=1, help="grounding retries per answer (0 = off)"
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -54,7 +63,9 @@ def main() -> None:
         client = OllamaClient(model=model)
         for question in QUESTIONS:
             # A fresh Analyst per question, so earlier answers can't help later ones.
-            analyst = Analyst(client, AnalysisTools(result))
+            analyst = Analyst(
+                client, AnalysisTools(result), max_retries=args.retries, audit_path=args.audit
+            )
             start = time.perf_counter()
             try:
                 answer = analyst.ask(question)
@@ -67,14 +78,27 @@ def main() -> None:
                     "question": question,
                     "seconds": round(time.perf_counter() - start, 1),
                     "tool_calls": len(answer.tool_calls),
+                    "distinct_tools": len({c.name for c in answer.tool_calls}),
+                    # Did it look at the raw evidence, or only at computed summaries?
+                    "fetched_raw_lines": any(c.name == "get_log_lines" for c in answer.tool_calls),
+                    # Saw raw log text from any tool (incl. sample_evidence in get_finding).
+                    "saw_raw_evidence": answer.saw_raw_evidence,
+                    "first_attempt_grounded": answer.first_attempt_passed,
+                    "retries": answer.retries,
                     "grounded": answer.verification.passed,
                     "cited_lines": len(answer.verification.cited_lines),
                     "hit_step_limit": answer.hit_step_limit,
                     "mentions_top_ip": top_ip in answer.text,
+                    # For error analysis: which tools, in order, and why grounding failed.
+                    "tools_used": " > ".join(c.name for c in answer.tool_calls),
+                    "grounding": answer.verification.summary(),
                     "error": "",
                 }
             )
-            print(f"{model:<20} {rows[-1]['seconds']:>6}s  grounded={answer.verification.passed}")
+            print(
+                f"{model:<20} {rows[-1]['seconds']:>6}s  "
+                f"first_try={answer.first_attempt_passed}  grounded={answer.verification.passed}"
+            )
 
     df = pd.DataFrame(rows)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -84,12 +108,21 @@ def main() -> None:
     summary = ok.groupby("model").agg(
         median_seconds=("seconds", "median"),
         mean_tool_calls=("tool_calls", "mean"),
+        raw_lines_rate=("fetched_raw_lines", "mean"),
+        raw_evidence_rate=("saw_raw_evidence", "mean"),
+        first_try_grounded=("first_attempt_grounded", "mean"),
         grounded_rate=("grounded", "mean"),
         step_limit_rate=("hit_step_limit", "mean"),
     )
     summary["errors"] = df.groupby("model")["error"].apply(lambda e: int((e != "").sum()))
     print("\n" + summary.round(2).to_string())
     print(f"\nPer-question results: {args.out}")
+    print(f"Full answers and tool calls: {args.audit}")
+    failed = ok[~ok["grounded"].astype(bool)]
+    for _, row in failed.iterrows():
+        print(f"\nFAILED [{row['model']}] {row['question']}")
+        print(f"  tools: {row['tools_used'] or 'none'}")
+        print(f"  {row['grounding']}")
 
 
 if __name__ == "__main__":

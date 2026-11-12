@@ -110,6 +110,8 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         print(f"\n{a.text}\n")
         calls = ", ".join(f"{c.name}({json.dumps(c.arguments)})" for c in a.tool_calls)
         print(f"[tools: {calls or 'none'}]")
+        if a.retries:
+            print("[first answer failed the evidence check; the model was asked to fix it]")
         print(f"[{a.verification.summary()}]\n")
 
     if args.question:

@@ -15,7 +15,9 @@ After the answer, a deterministic **grounding check** verifies what can be
 verified mechanically: cited line numbers must be ones the tools actually
 returned, IP addresses must occur in the evidence, and any SHA-256 must be
 the evidence hash. This doesn't prove the answer correct, but it catches the
-most damaging failure, which is invented evidence.
+most damaging failure, which is invented evidence. If the check fails, the
+answer goes back to the model once with the specific problems (verify, then
+retry), and both attempts are recorded in the audit log.
 """
 
 from __future__ import annotations
@@ -55,11 +57,16 @@ class Verification:
     unknown_ips: list[str] = field(default_factory=list)
     wrong_hashes: list[str] = field(default_factory=list)
     has_citations: bool = False
+    # Tool calls that returned an error, as "tool: message". An answer built
+    # only on failed calls must not pass, however it is worded.
+    tool_errors: list[str] = field(default_factory=list)
+    no_successful_tool_result: bool = False
 
     @property
     def passed(self) -> bool:
         return (
-            self.has_citations
+            not self.no_successful_tool_result
+            and self.has_citations
             and not self.unverified_lines
             and not self.unknown_ips
             and not self.wrong_hashes
@@ -69,6 +76,8 @@ class Verification:
         if self.passed:
             return f"Grounding check passed: {len(self.cited_lines)} cited lines all verified."
         problems = []
+        if self.no_successful_tool_result:
+            problems.append("answered without any successful tool result")
         if not self.has_citations:
             problems.append("no line citations")
         if self.unverified_lines:
@@ -89,6 +98,10 @@ class Answer:
     model: str
     steps: int
     hit_step_limit: bool = False
+    retries: int = 0
+    first_attempt_passed: bool = True
+    first_attempt_text: str = ""
+    saw_raw_evidence: bool = False
 
 
 def _parse_line_refs(spec: str) -> list[int]:
@@ -126,8 +139,44 @@ def _lines_in_tool_output(payload: Any) -> set[int]:
     return found
 
 
-def verify_answer(text: str, tools: AnalysisTools, referenced_lines: set[int]) -> Verification:
-    v = Verification()
+def _contains_raw_lines(payload: Any) -> bool:
+    """True if a tool result included raw log text (any ``untrusted_log_lines`` list)."""
+    if isinstance(payload, dict):
+        if payload.get("untrusted_log_lines"):
+            return True
+        return any(_contains_raw_lines(v) for v in payload.values())
+    if isinstance(payload, list):
+        return any(_contains_raw_lines(v) for v in payload)
+    return False
+
+
+def _retry_message(v: Verification) -> str:
+    msg = (
+        "[Automated evidence check, not the investigator] Your previous answer failed "
+        f"verification: {v.summary().removeprefix('Grounding check FAILED: ')}. "
+    )
+    if v.tool_errors:
+        msg += (
+            "These tool calls failed: "
+            + "; ".join(v.tool_errors[:5])
+            + ". A failed call is not evidence that something did not happen. Follow the "
+            "hints in the errors and call the right tool BEFORE answering. "
+        )
+    return msg + (
+        "Then rewrite the answer. Cite the line numbers that tools returned, as [line N] "
+        "or [lines N-M]. Remove any IP address, hash or line number that no tool returned."
+    )
+
+
+def verify_answer(
+    text: str,
+    tools: AnalysisTools,
+    referenced_lines: set[int],
+    tool_errors: list[str] | None = None,
+    n_successful_tool_results: int | None = None,
+) -> Verification:
+    v = Verification(tool_errors=list(tool_errors or []))
+    v.no_successful_tool_result = n_successful_tool_results == 0
     for match in _CITATION.finditer(text):
         v.cited_lines.extend(_parse_line_refs(match.group(1)))
     v.cited_lines = sorted(set(v.cited_lines))
@@ -148,20 +197,24 @@ class Analyst:
         client: ChatClient,
         tools: AnalysisTools,
         max_steps: int = 8,
+        max_retries: int = 1,
         audit_path: str | Path | None = None,
     ):
         self.client = client
         self.tools = tools
         self.max_steps = max_steps
+        self.max_retries = max_retries
+        self._saw_raw_evidence = False
+        self._tool_errors: list[str] = []
+        self._n_ok = 0
+        self._n_ok_before = 0  # successful tool results from earlier questions
         self.audit_path = Path(audit_path) if audit_path else None
         self.history: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.referenced_lines: set[int] = set()
 
-    def ask(self, question: str) -> Answer:
-        self.history.append({"role": "user", "content": question})
-        records: list[ToolCallRecord] = []
-        text, steps, hit_limit = "", 0, False
-
+    def _run_tools_loop(self, records: list[ToolCallRecord]) -> tuple[str, int, bool]:
+        """Let the model call tools until it answers in text. Returns (text, steps, hit_limit)."""
+        steps = 0
         while True:
             steps += 1
             message = self.client.chat(self.history, tools=self.tools.schemas())
@@ -175,15 +228,14 @@ class Analyst:
                 }
             )
             if not calls:
-                text = message.get("content", "") or ""
-                break
+                return message.get("content", "") or "", steps, False
             if steps >= self.max_steps:
-                hit_limit = True
-                text = (
+                return (
                     "I stopped after reaching the tool-call limit without a final answer. "
-                    "Try a narrower question."
+                    "Try a narrower question.",
+                    steps,
+                    True,
                 )
-                break
             for call in calls:
                 fn = call.get("function", {})
                 name, args = fn.get("name", ""), fn.get("arguments") or {}
@@ -194,13 +246,40 @@ class Analyst:
                         args = {"_unparseable": args}
                 result = self.tools.call(name, args)
                 try:
-                    self.referenced_lines |= _lines_in_tool_output(json.loads(result))
+                    payload = json.loads(result)
+                    if isinstance(payload, dict) and "error" in payload:
+                        self._tool_errors.append(f"{name}: {payload['error']}")
+                    else:
+                        self._n_ok += 1
+                    self.referenced_lines |= _lines_in_tool_output(payload)
+                    if _contains_raw_lines(payload):
+                        self._saw_raw_evidence = True
                 except json.JSONDecodeError:
                     pass
                 records.append(ToolCallRecord(name, args, len(result)))
                 self.history.append({"role": "tool", "tool_name": name, "content": result})
 
-        verification = verify_answer(text, self.tools, self.referenced_lines)
+    def ask(self, question: str) -> Answer:
+        self.history.append({"role": "user", "content": question})
+        records: list[ToolCallRecord] = []
+        self._saw_raw_evidence = False
+        self._tool_errors: list[str] = []
+        self._n_ok = 0
+
+        text, steps, hit_limit = self._run_tools_loop(records)
+        verification = self._verify(text)
+        first_passed, first_text, retries = verification.passed, text, 0
+
+        # Verify, then retry: a failed grounding check goes back to the model
+        # once, with the specific problems. The corrective note is labelled as
+        # coming from the evidence checker, not from the investigator.
+        while not verification.passed and not hit_limit and retries < self.max_retries:
+            retries += 1
+            self.history.append({"role": "user", "content": _retry_message(verification)})
+            text, more_steps, hit_limit = self._run_tools_loop(records)
+            steps += more_steps
+            verification = self._verify(text)
+
         answer = Answer(
             question=question,
             text=text,
@@ -209,9 +288,20 @@ class Analyst:
             model=self.client.model,
             steps=steps,
             hit_step_limit=hit_limit,
+            retries=retries,
+            first_attempt_passed=first_passed,
+            first_attempt_text=first_text if retries else "",
+            saw_raw_evidence=self._saw_raw_evidence,
         )
         self._audit(answer)
+        self._n_ok_before += self._n_ok
         return answer
+
+    def _verify(self, text: str) -> Verification:
+        # Successful results from earlier questions in the conversation count too:
+        # the model may legitimately answer a follow-up from what it already has.
+        n_ok = self._n_ok + self._n_ok_before
+        return verify_answer(text, self.tools, self.referenced_lines, self._tool_errors, n_ok)
 
     def _audit(self, answer: Answer) -> None:
         """Append-only record of what was asked, which tools ran and what was said."""
@@ -225,6 +315,10 @@ class Analyst:
             "question": answer.question,
             "tool_calls": [asdict(c) for c in answer.tool_calls],
             "answer": answer.text,
+            "retries": answer.retries,
+            "first_attempt_passed": answer.first_attempt_passed,
+            "first_attempt_answer": answer.first_attempt_text or None,
+            "saw_raw_evidence": answer.saw_raw_evidence,
             "grounding_passed": answer.verification.passed,
             "grounding": asdict(answer.verification),
         }
