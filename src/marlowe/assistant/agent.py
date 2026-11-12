@@ -31,7 +31,12 @@ from marlowe.assistant.ollama import ChatClient
 from marlowe.assistant.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from marlowe.assistant.tools import AnalysisTools
 
-_CITATION = re.compile(r"\[lines?\s+([0-9,\s\-–]+)\]", re.IGNORECASE)
+# Any mention of "line N" / "lines N-M, K", whatever brackets surround it.
+# The prompt asks for [line N], but models often write (lines N-M) or plain
+# prose. We verify every line number claimed, not just neatly formatted ones;
+# a stricter format check would fail correct answers and miss nothing extra.
+_RANGE = r"\d+(?:\s*[-–]\s*\d+)?"
+_CITATION = re.compile(rf"\blines?\s+({_RANGE}(?:\s*(?:,|and|&)\s*{_RANGE})*)", re.IGNORECASE)
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE)
 
@@ -88,7 +93,7 @@ class Answer:
 
 def _parse_line_refs(spec: str) -> list[int]:
     lines: list[int] = []
-    for part in spec.split(","):
+    for part in re.split(r",|\band\b|&", spec):
         part = part.strip().replace("–", "-")
         if not part:
             continue

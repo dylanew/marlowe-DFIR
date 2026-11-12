@@ -135,3 +135,18 @@ def test_injected_instructions_in_logs_stay_data(analysis):
     carrying = [m for m in msgs if "IGNORE_PREVIOUS_INSTRUCTIONS" in m.get("content", "")]
     assert [m["role"] for m in carrying] == ["tool"]
     assert "untrusted_log_lines" in carrying[0]["content"]
+
+
+def test_citation_styles_real_models_use(analysis):
+    # From a real llama3.1:8b answer, which used parentheses, not square brackets.
+    tools = AnalysisTools(analysis)
+    text = "130 failed passwords from one IP in a window (lines 1309-1548). See lines 5 and 7."
+    v = verify_answer(text, tools, set(range(1, 2000)))
+    assert v.has_citations
+    assert v.cited_lines[:3] == [5, 7, 1309]
+    assert v.cited_lines[-1] == 1548
+    assert v.passed
+
+    v = verify_answer("as shown on line 99999", tools, set(range(1, 2000)))
+    assert v.unverified_lines == [99999]
+    assert not v.passed
