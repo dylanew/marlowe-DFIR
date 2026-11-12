@@ -5,7 +5,8 @@ Run from the repository root, with Ollama running and the models pulled:
     python scripts/benchmark_models.py llama3.1:8b qwen2.5:7b mistral-nemo
 
 For every model and question it records latency, the number of tool calls,
-whether the grounding check passed, and whether the answer names the IP
+whether it fetched raw log lines (not just computed summaries), whether the
+grounding check passed, and whether the answer names the IP
 behind the top finding. Results go to data/processed/model_benchmark.csv,
 and a summary table is printed.
 
@@ -67,6 +68,9 @@ def main() -> None:
                     "question": question,
                     "seconds": round(time.perf_counter() - start, 1),
                     "tool_calls": len(answer.tool_calls),
+                    "distinct_tools": len({c.name for c in answer.tool_calls}),
+                    # Did it look at the raw evidence, or only at computed summaries?
+                    "fetched_raw_lines": any(c.name == "get_log_lines" for c in answer.tool_calls),
                     "grounded": answer.verification.passed,
                     "cited_lines": len(answer.verification.cited_lines),
                     "hit_step_limit": answer.hit_step_limit,
@@ -84,6 +88,7 @@ def main() -> None:
     summary = ok.groupby("model").agg(
         median_seconds=("seconds", "median"),
         mean_tool_calls=("tool_calls", "mean"),
+        raw_lines_rate=("fetched_raw_lines", "mean"),
         grounded_rate=("grounded", "mean"),
         step_limit_rate=("hit_step_limit", "mean"),
     )

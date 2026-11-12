@@ -76,9 +76,18 @@ python scripts/benchmark_models.py llama3.1:8b qwen2.5:7b
 
 The script asks 5 fixed questions per model and records latency, tool calls, grounding pass rate and step-limit hits. The results table belongs in this document once it has been run.
 
-| Model | Median s/answer | Grounded rate | Notes |
-|---|---|---|---|
-| *to be filled in from your benchmark run* | | | |
+| Model | Median s/answer | Mean tool calls | Raw-lines rate | Grounded rate | Notes |
+|---|---|---|---|---|---|
+| *to be filled in from a benchmark run* | | | | | |
+
+`Raw-lines rate` is the share of answers where the model fetched the actual log lines with `get_log_lines` instead of relying only on computed summaries. A careful analyst checks the source, so higher is better.
+
+### First real run (llama3.1:8b, M4 MacBook Air)
+
+Asked "What is the most serious finding?", the model called `get_finding("F1")` once and answered correctly. It identified the brute force from `203.0.113.62`, and every number it quoted (130 failures, 109 invalid users, 239 events, score 0.757, lines 1309–1548) matched the analysis. Two lessons:
+
+- It cited `(lines 1309-1548)` rather than the requested `[lines ...]`, so the first version of the grounding check wrongly reported "no citations". The checker now verifies every "line N" mention, whatever the brackets.
+- It summarised from computed features **without fetching any raw lines**, despite the prompt asking it to check the source. The benchmark's raw-lines rate measures this across questions and models.
 
 ## Testing without a GPU
 
