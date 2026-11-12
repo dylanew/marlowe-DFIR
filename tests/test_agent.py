@@ -197,7 +197,9 @@ def test_citation_styles_real_models_use(analysis):
     # From a real llama3.1:8b answer, which used parentheses, not square brackets.
     tools = AnalysisTools(analysis)
     text = "130 failed passwords from one IP in a window (lines 1309-1548). See lines 5 and 7."
-    v = verify_answer(text, tools, set(range(1, 2000)))
+    # 1309-1548 is wider than MAX_CITATION_SPAN, so it only passes when a tool
+    # returned it as one block (here, as if it were a finding's window).
+    v = verify_answer(text, tools, set(range(1, 2000)), referenced_ranges={(1300, 1600)})
     assert v.has_citations
     assert v.cited_lines[:3] == [5, 7, 1309]
     assert v.cited_lines[-1] == 1548
@@ -286,3 +288,76 @@ def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
     voiced.ask("q")
     records = [json.loads(line) for line in audit.read_text().splitlines()]
     assert [r["persona_version"] for r in records] == [None, "1"]
+
+
+def test_wide_citation_must_match_a_block_a_tool_returned(analysis):
+    """Seen in the web app: "539 cited lines all verified" from one sweeping range."""
+    tools = AnalysisTools(analysis)
+    seen = set(range(1, 2000))
+    v = verify_answer("It's all in [lines 10-548].", tools, seen, referenced_ranges={(10, 20)})
+    assert v.too_wide_citations == ["10-548"]
+    assert not v.passed
+    assert "too wide" in v.summary()
+    # Narrow citations are fine anywhere among the lines the tools returned.
+    assert verify_answer("See [lines 10-40] and [line 548].", tools, seen).passed
+
+
+def test_wide_citation_of_a_whole_finding_passes(analysis):
+    tools = AnalysisTools(analysis)
+    f = tools.get_finding("F1")
+    lo, hi = (int(x) for x in f["line_range"].split("-"))
+    assert hi - lo + 1 > 40  # the brute force: a wide window, cited as a whole
+    client = FakeClient(
+        [
+            tool_call("get_finding", finding_id=f["finding_id"]),
+            final(f"{f['src_ip']} hammered the server [lines {lo}-{hi}]."),
+        ]
+    )
+    answer = Analyst(client, tools).ask(f"What is {f['finding_id']}?")
+    assert answer.verification.passed, answer.verification.summary()
+
+
+def test_asked_about_absent_ip_can_answer_not_in_evidence(analysis):
+    """Seen in the web app: "What did 10.9.9.9 do?" got a correct answer and a red badge."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="10.9.9.9"),
+            final("10.9.9.9 does not appear in the evidence. There is nothing to report."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("What did 10.9.9.9 do?")
+    v = answer.verification
+    assert v.passed, v.summary()
+    assert v.reported_absent == ["10.9.9.9"]
+    assert answer.retries == 0
+    assert "not in the evidence" in v.summary()
+
+
+def test_absence_of_a_guessed_ip_is_not_an_answer(analysis):
+    """The original failure must still fail: the model guessed an IP the
+    investigator never mentioned, and "it isn't there" proves nothing."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="192.168.1.100"),
+            final("192.168.1.100 does not appear in the evidence, so no brute force."),
+            final("Still nothing for 192.168.1.100, it is not in the log."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("Was there a brute-force attack?")
+    v = answer.verification
+    assert not v.passed
+    assert v.no_successful_tool_result
+    assert v.unknown_ips == ["192.168.1.100"]
+
+
+def test_absence_wording_is_required(analysis):
+    """Asked about a missing IP, but the answer invents activity anyway."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="10.9.9.9"),
+            final("10.9.9.9 brute-forced root and got in."),
+            final("10.9.9.9 brute-forced root and got in."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("What did 10.9.9.9 do?")
+    assert not answer.verification.passed

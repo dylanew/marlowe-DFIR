@@ -42,6 +42,20 @@ _CITATION = re.compile(rf"\blines?\s+({_RANGE}(?:\s*(?:,|and|&)\s*{_RANGE})*)", 
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE)
 
+# A citation wider than this must sit inside one range a tool returned (a
+# finding's window). Otherwise "[lines 1-539]" would pass simply because every
+# line in it was seen somewhere, while pointing at nothing in particular.
+# 40 matches the most get_log_lines returns at once.
+MAX_CITATION_SPAN = 40
+
+# Wording that reports an absence. Used only when a tool confirmed the absence,
+# so an answer can't claim "nothing found" for something that is there.
+_ABSENCE = re.compile(
+    r"\b(?:not (?:appear|present|found|in the (?:log|evidence))|does(?: not|n't) appear|"
+    r"no (?:record|trace|evidence|activity|events?|sign)|isn't in|is not in|never appears?)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class ToolCallRecord:
@@ -61,25 +75,44 @@ class Verification:
     # only on failed calls must not pass, however it is worded.
     tool_errors: list[str] = field(default_factory=list)
     no_successful_tool_result: bool = False
+    # Citations wider than MAX_CITATION_SPAN that no tool returned as one range.
+    too_wide_citations: list[str] = field(default_factory=list)
+    # Values a tool confirmed are NOT in the evidence and the answer says so.
+    reported_absent: list[str] = field(default_factory=list)
+
+    @property
+    def absence_answer(self) -> bool:
+        """An uncited answer whose point is that something isn't in the evidence."""
+        return not self.has_citations and bool(self.reported_absent)
 
     @property
     def passed(self) -> bool:
         return (
             not self.no_successful_tool_result
-            and self.has_citations
+            and (self.has_citations or self.absence_answer)
             and not self.unverified_lines
+            and not self.too_wide_citations
             and not self.unknown_ips
             and not self.wrong_hashes
         )
 
     def summary(self) -> str:
+        if self.passed and self.absence_answer:
+            return (
+                "Grounding check passed: the answer reports that "
+                f"{', '.join(self.reported_absent)} is not in the evidence, as the tools confirmed."
+            )
         if self.passed:
             return f"Grounding check passed: {len(self.cited_lines)} cited lines all verified."
         problems = []
         if self.no_successful_tool_result:
             problems.append("answered without any successful tool result")
-        if not self.has_citations:
+        if not self.has_citations and not self.absence_answer:
             problems.append("no line citations")
+        if self.too_wide_citations:
+            problems.append(
+                f"citations too wide to point at specific evidence: {self.too_wide_citations[:5]}"
+            )
         if self.unverified_lines:
             problems.append(f"lines not returned by any tool: {self.unverified_lines[:10]}")
         if self.unknown_ips:
@@ -104,20 +137,45 @@ class Answer:
     saw_raw_evidence: bool = False
 
 
-def _parse_line_refs(spec: str) -> list[int]:
-    lines: list[int] = []
+def _parse_ranges(spec: str) -> list[tuple[int, int]]:
+    """ "12-15, 20 and 31" -> [(12, 15), (20, 20), (31, 31)]."""
+    ranges: list[tuple[int, int]] = []
     for part in re.split(r",|\band\b|&", spec):
         part = part.strip().replace("–", "-")
-        if not part:
-            continue
         if "-" in part:
             a, _, b = part.partition("-")
             if a.strip().isdigit() and b.strip().isdigit():
                 lo, hi = sorted((int(a), int(b)))
-                lines.extend(range(lo, min(hi, lo + 5000) + 1))
+                ranges.append((lo, hi))
         elif part.isdigit():
-            lines.append(int(part))
+            ranges.append((int(part), int(part)))
+    return ranges
+
+
+def _parse_line_refs(spec: str) -> list[int]:
+    lines: list[int] = []
+    for lo, hi in _parse_ranges(spec):
+        lines.extend(range(lo, min(hi, lo + 5000) + 1))
     return lines
+
+
+def _ranges_in_tool_output(payload: Any) -> set[tuple[int, int]]:
+    """Every contiguous block a tool presented as one unit (a finding's lines)."""
+    found: set[tuple[int, int]] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "line_nos" and isinstance(value, list):
+                nums = [v for v in value if isinstance(v, int)]
+                if nums:
+                    found.add((min(nums), max(nums)))
+            elif key == "line_range" and isinstance(value, str):
+                found.update(_parse_ranges(value))
+            else:
+                found |= _ranges_in_tool_output(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            found |= _ranges_in_tool_output(item)
+    return found
 
 
 def _lines_in_tool_output(payload: Any) -> set[int]:
@@ -162,6 +220,11 @@ def _retry_message(v: Verification) -> str:
             + ". A failed call is not evidence that something did not happen. Follow the "
             "hints in the errors and call the right tool BEFORE answering. "
         )
+    if v.too_wide_citations:
+        msg += (
+            f"Cite the specific lines behind each claim (at most {MAX_CITATION_SPAN} per "
+            "range, or one finding's own range), not one wide range. "
+        )
     return msg + (
         "Then rewrite the answer. Cite the line numbers that tools returned, as [line N] "
         "or [lines N-M]. Remove any IP address, hash or line number that no tool returned."
@@ -174,16 +237,28 @@ def verify_answer(
     referenced_lines: set[int],
     tool_errors: list[str] | None = None,
     n_successful_tool_results: int | None = None,
+    referenced_ranges: set[tuple[int, int]] | None = None,
+    confirmed_absent: set[str] | None = None,
 ) -> Verification:
     v = Verification(tool_errors=list(tool_errors or []))
     v.no_successful_tool_result = n_successful_tool_results == 0
+    blocks = referenced_ranges or set()
     for match in _CITATION.finditer(text):
         v.cited_lines.extend(_parse_line_refs(match.group(1)))
+        for lo, hi in _parse_ranges(match.group(1)):
+            wide = hi - lo + 1 > MAX_CITATION_SPAN
+            if wide and not any(a <= lo and hi <= b for a, b in blocks):
+                v.too_wide_citations.append(f"{lo}-{hi}")
     v.cited_lines = sorted(set(v.cited_lines))
     v.has_citations = bool(v.cited_lines)
     v.unverified_lines = [n for n in v.cited_lines if n not in referenced_lines]
 
-    known_ips = set(tools.events["src_ip"].dropna().unique())
+    absent = confirmed_absent or set()
+    if _ABSENCE.search(text):
+        v.reported_absent = sorted(a for a in absent if a and a in text)
+
+    # An IP a tool confirmed is absent may be named, to say it is absent.
+    known_ips = set(tools.events["src_ip"].dropna().unique()) | absent
     v.unknown_ips = sorted({ip for ip in _IPV4.findall(text) if ip not in known_ips})
 
     sha = tools.result.evidence.sha256.lower()
@@ -213,6 +288,9 @@ class Analyst:
         self.persona = persona
         self.history: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(persona)}]
         self.referenced_lines: set[int] = set()
+        self.referenced_ranges: set[tuple[int, int]] = set()
+        self.confirmed_absent: set[str] = set()
+        self._question = ""
 
     def _run_tools_loop(self, records: list[ToolCallRecord]) -> tuple[str, int, bool]:
         """Let the model call tools until it answers in text. Returns (text, steps, hit_limit)."""
@@ -251,9 +329,17 @@ class Analyst:
                     payload = json.loads(result)
                     if isinstance(payload, dict) and "error" in payload:
                         self._tool_errors.append(f"{name}: {payload['error']}")
+                        # "Not in the evidence" is a real answer, not a failure, but
+                        # only for something the investigator asked about. A value the
+                        # model guessed (e.g. 192.168.1.100) proves nothing.
+                        missing = str(payload.get("not_found") or "")
+                        if missing and missing.lower() in self._question.lower():
+                            self.confirmed_absent.add(missing)
+                            self._n_ok += 1
                     else:
                         self._n_ok += 1
                     self.referenced_lines |= _lines_in_tool_output(payload)
+                    self.referenced_ranges |= _ranges_in_tool_output(payload)
                     if _contains_raw_lines(payload):
                         self._saw_raw_evidence = True
                 except json.JSONDecodeError:
@@ -263,6 +349,7 @@ class Analyst:
 
     def ask(self, question: str) -> Answer:
         self.history.append({"role": "user", "content": question})
+        self._question = question
         records: list[ToolCallRecord] = []
         self._saw_raw_evidence = False
         self._tool_errors: list[str] = []
@@ -303,7 +390,15 @@ class Analyst:
         # Successful results from earlier questions in the conversation count too:
         # the model may legitimately answer a follow-up from what it already has.
         n_ok = self._n_ok + self._n_ok_before
-        return verify_answer(text, self.tools, self.referenced_lines, self._tool_errors, n_ok)
+        return verify_answer(
+            text,
+            self.tools,
+            self.referenced_lines,
+            self._tool_errors,
+            n_ok,
+            self.referenced_ranges,
+            self.confirmed_absent,
+        )
 
     def _audit(self, answer: Answer) -> None:
         """Append-only record of what was asked, which tools ran and what was said."""
