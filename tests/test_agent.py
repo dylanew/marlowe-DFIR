@@ -400,3 +400,34 @@ def test_prompt_allows_general_questions_but_keeps_evidence_rules():
     assert "General guidance, not drawn from this evidence." in SYSTEM_PROMPT
     assert "Never guess IP addresses" in SYSTEM_PROMPT
     assert "conversational overview" in SYSTEM_PROMPT
+
+
+def test_overview_points_at_the_top_findings(analysis):
+    overview = AnalysisTools(analysis).get_overview()
+    top = overview["top_findings"]
+    assert [f["finding_id"] for f in top] == ["F1", "F2", "F3"]
+    assert all("line_range" in f for f in top)
+    assert "get_finding" in overview["next"]
+
+
+def test_replay_overview_only_answer_with_invented_line(analysis):
+    """Replays a real llama3.1:8b answer to "was there a brute force attack?":
+    it called only get_overview, quoted the total failures and cited a line
+    no tool returned. It must fail, and the retry must send it to get_finding."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    client = FakeClient(
+        [
+            tool_call("get_overview"),
+            final("There were 655 authentication failures in the log. [line 1234]"),
+            tool_call("get_finding", finding_id="F1"),
+            final(
+                f"{f1['src_ip']} made {f1['n_failed']} failed attempts [line {f1['line_nos'][0]}]."
+            ),
+        ]
+    )
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    assert not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert "get_finding" in retry
+    assert answer.verification.passed

@@ -240,6 +240,11 @@ def _retry_message(v: Verification) -> str:
             + ". A failed call is not evidence that something did not happen. Follow the "
             "hints in the errors and call the right tool BEFORE answering. "
         )
+    if v.unverified_lines or (not v.has_citations and not v.tool_errors):
+        msg += (
+            "Totals from get_overview have no line numbers to cite. Look up the relevant "
+            "findings with get_finding (and get_log_lines if needed) and cite those lines. "
+        )
     if v.too_wide_citations:
         msg += (
             f"Cite the specific lines behind each claim (at most {MAX_CITATION_SPAN} per "

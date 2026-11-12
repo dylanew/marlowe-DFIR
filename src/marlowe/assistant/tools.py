@@ -262,6 +262,14 @@ class AnalysisTools:
                 "isolation_forest": "unsupervised anomaly score; higher = more unusual",
             },
             "n_findings": int(len(self.findings)),
+            # The overview alone can't answer "was there an attack?": it has
+            # counts, not who or which lines. A real llama3.1:8b answer stopped
+            # here and invented a citation, so the top leads come with it.
+            "top_findings": [
+                self._finding_summary(row) for _, row in self.findings.head(3).iterrows()
+            ],
+            "next": "Call get_finding on the relevant finding(s) for details and raw "
+            "lines before answering any question about attacks or suspicious activity.",
         }
 
     def _finding_summary(self, row: pd.Series) -> dict[str, Any]:
