@@ -431,3 +431,30 @@ def test_replay_overview_only_answer_with_invented_line(analysis):
     retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
     assert "get_finding" in retry
     assert answer.verification.passed
+
+
+def test_finding_says_whether_the_ip_ever_got_in(analysis):
+    """The brute force's root login falls just after F1's window; a real answer
+    missed it. Every finding now carries the IP's successful logins."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_overview()["top_findings"][0]
+    assert f1["n_success"] == 0
+    assert f1["src_ip_ever_logged_in_as"] == ["root"]
+
+
+def test_replay_invented_end_time(analysis):
+    """Real answer: "between 2026-10-14T16:50:00+00:00 and 2026-10-14T17:40:00+00:00".
+    The window starts at 16:50; 17:40 was never returned by any tool."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    lo, hi = f1["line_range"].split("-")
+    start = f1["window_start_utc"]
+    claim = f"{f1['src_ip']} failed {f1['n_failed']} times"
+    bad = f"{claim} between {start} and 2026-10-14T17:40 [lines {lo}-{hi}]."
+    good = f"{claim} from {start} [lines {lo}-{hi}]."
+    client = FakeClient([tool_call("get_finding", finding_id="F1"), final(bad), final(good)])
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    assert not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert "2026-10-14T17:40" in retry
+    assert answer.verification.passed

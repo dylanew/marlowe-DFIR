@@ -41,6 +41,16 @@ _RANGE = r"\d+(?:\s*[-–]\s*\d+)?"
 _CITATION = re.compile(rf"\blines?\s+({_RANGE}(?:\s*(?:,|and|&)\s*{_RANGE})*)", re.IGNORECASE)
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE)
+# ISO-style timestamps, to the minute. Every one in an answer must have
+# appeared in a tool result: a real answer turned a window starting 16:50
+# into "between 16:50 and 17:40", and 17:40 came from nowhere.
+_TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})")
+
+
+def _timestamps(text: str) -> set[str]:
+    return {f"{d}T{t}" for d, t in _TIMESTAMP.findall(text)}
+
+
 _FINDING_REF = re.compile(r"\bF\d{1,3}\b")
 # The prompt asks general answers to say so in these words. Requiring the
 # label means an unlabelled, uncited claim ("It was a brute force attack.")
@@ -84,6 +94,8 @@ class Verification:
     too_wide_citations: list[str] = field(default_factory=list)
     # Values a tool confirmed are NOT in the evidence and the answer says so.
     reported_absent: list[str] = field(default_factory=list)
+    # Timestamps (to the minute) that no tool returned.
+    unknown_times: list[str] = field(default_factory=list)
     # True if the answer is labelled as general guidance and names nothing
     # from the evidence (no citations, IPs, hashes or finding IDs).
     general: bool = False
@@ -100,6 +112,7 @@ class Verification:
             and (self.has_citations or self.absence_answer)
             and not self.unverified_lines
             and not self.too_wide_citations
+            and not self.unknown_times
             and not self.unknown_ips
             and not self.wrong_hashes
         )
@@ -137,6 +150,8 @@ class Verification:
             problems.append(f"lines not returned by any tool: {self.unverified_lines[:10]}")
         if self.unknown_ips:
             problems.append(f"IPs not in the evidence: {self.unknown_ips}")
+        if self.unknown_times:
+            problems.append(f"timestamps not returned by any tool: {self.unknown_times[:5]}")
         if self.wrong_hashes:
             problems.append("a SHA-256 that is not the evidence hash")
         return "Grounding check FAILED: " + "; ".join(problems)
@@ -264,6 +279,7 @@ def verify_answer(
     n_successful_tool_results: int | None = None,
     referenced_ranges: set[tuple[int, int]] | None = None,
     confirmed_absent: set[str] | None = None,
+    seen_times: set[str] | None = None,
 ) -> Verification:
     v = Verification(tool_errors=list(tool_errors or []))
     v.no_successful_tool_result = n_successful_tool_results == 0
@@ -285,6 +301,8 @@ def verify_answer(
     # An IP a tool confirmed is absent may be named, to say it is absent.
     known_ips = set(tools.events["src_ip"].dropna().unique()) | absent
     v.unknown_ips = sorted({ip for ip in _IPV4.findall(text) if ip not in known_ips})
+    if seen_times is not None:
+        v.unknown_times = sorted(_timestamps(text) - seen_times)
     v.general = bool(_GENERAL_LABEL.search(text)) and not (
         v.has_citations
         or v.reported_absent
@@ -323,6 +341,7 @@ class Analyst:
         self.referenced_ranges: set[tuple[int, int]] = set()
         self.confirmed_absent: set[str] = set()
         self._question = ""
+        self.seen_times: set[str] = set()
 
     def _run_tools_loop(self, records: list[ToolCallRecord]) -> tuple[str, int, bool]:
         """Let the model call tools until it answers in text. Returns (text, steps, hit_limit)."""
@@ -357,6 +376,7 @@ class Analyst:
                     except json.JSONDecodeError:
                         args = {"_unparseable": args}
                 result = self.tools.call(name, args)
+                self.seen_times |= _timestamps(result)
                 try:
                     payload = json.loads(result)
                     if isinstance(payload, dict) and "error" in payload:
@@ -431,6 +451,7 @@ class Analyst:
             n_ok,
             self.referenced_ranges,
             self.confirmed_absent,
+            self.seen_times,
         )
 
     def _audit(self, answer: Answer) -> None:
