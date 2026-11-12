@@ -23,11 +23,13 @@ Follow-ups identified by the error analysis:
 - Per-user (UEBA) features for stolen credentials used from familiar networks
 - Validation on a public dataset with real behaviour
 
-## Step 3: Marlowe as an AI analyst
+## Step 3: Marlowe as an AI analyst (done, model benchmark pending)
 
 - Benchmark local models that fit in 16 GB
 - Python layer where the LLM can only call predefined, read-only analysis functions
 - Explanations of flagged events that cite evidence IDs and line numbers
+- Deterministic grounding check and an append-only audit log
+- To do: run `scripts/benchmark_models.py` on the Mac and record the results in `docs/assistant.md`
 
 ## Step 4: Portfolio presentation
 
