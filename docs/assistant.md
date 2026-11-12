@@ -85,7 +85,9 @@ The script asks 5 fixed questions per model and records latency, tool calls, gro
 | llama3.1:8b | step 3 (prompt only) | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; 5.0–36.6 s per answer |
 | llama3.1:8b | step 3b, sample evidence only (`--retries 0`) | 16.9 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | |
 | llama3.1:8b | step 3b, sample evidence + 1 retry | 25.0 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | same 2 questions failed; retry did not fix them |
-| llama3.1:8b | step 3c, recoverable errors + `list_logins` + prompt v2 | *to run* | | | | | |
+| llama3.1:8b | step 3c, recoverable errors + `list_logins` + prompt v2 | 34.5 | 1.6 | 0.4 | 0.6 (3 of 5) | **1.0 (5 of 5)** | both former failures recovered via retry; one answer took 120 s |
+
+**Step 3c result:** final grounding went from 3 of 5 to **5 of 5**. Both questions that had failed in every earlier configuration now pass after one retry, because the retry message tells the model which call failed and which tool to use. The first-try rate didn't change (0.6), so the model still guesses at first. The improvement comes from the *system* catching and correcting it, which is the point of step 3b/3c. The cost is latency: the median rose from about 22 s to 34.5 s, and a retried answer can take up to 2 minutes. Caveats: 5 questions and a single run. Grounding also verifies that the evidence is *real*, not that the conclusion is *right*, so the recovered answers still need reading against the ground truth.
 
 **Step 3b result: no measurable improvement.** The same two questions failed in every configuration. Two things the numbers show:
 - **Sample evidence rarely reaches the model** (1 answer in 5). With about 1.2 tool calls per question, the model mostly stops after `get_overview` or `list_findings`, and neither of those returns raw lines. The evidence was added to the tools the model *doesn't* call.

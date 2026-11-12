@@ -37,12 +37,12 @@ Follow-ups identified by the error analysis:
 - Verify-then-retry when the grounding check fails
 - Result: no measurable improvement; error analysis showed the real cause
 
-## Step 3c: Recoverable tool errors (current)
+## Step 3c: Recoverable tool errors (done: final grounding 3/5 -> 5/5)
 
 - Errors return real candidates and next-step hints; new `list_logins` tool
 - An answer built only on failed tool calls fails grounding
 - Prompt v2: discover identifiers, never guess them
-- Re-run the benchmark against the step 3 and 3b baselines
+- Re-ran the benchmark: both former failures now recover via retry
 
 ## Step 4: Portfolio presentation
 
