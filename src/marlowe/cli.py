@@ -2,16 +2,19 @@
 
 marlowe generate --out data/sample        # write a synthetic auth.log + labels
 marlowe analyse data/sample/auth.log --year 2026 --labels data/sample/auth_labels.csv
+marlowe chat data/sample/auth.log --year 2026      # ask Marlowe (needs Ollama running)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
+from marlowe.assistant.ollama import DEFAULT_MODEL, DEFAULT_URL
 from marlowe.pipeline import analyse_auth_log
 from marlowe.synthetic import generate_auth_log
 
@@ -73,6 +76,56 @@ def _cmd_analyse(args: argparse.Namespace) -> None:
         print(f"\nAll findings written to {args.findings}")
 
 
+def _cmd_chat(args: argparse.Namespace) -> None:
+    # Imported here so `marlowe generate/analyse` work without touching the assistant.
+    from marlowe.assistant import AnalysisTools, Analyst, OllamaClient, OllamaError
+
+    client = OllamaClient(model=args.model, base_url=args.ollama_url)
+    try:
+        available = client.list_models()
+    except OllamaError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.model not in available and f"{args.model}:latest" not in available:
+        raise SystemExit(
+            f"Model '{args.model}' is not installed. Run `ollama pull {args.model}`. "
+            f"Installed: {', '.join(available) or 'none'}"
+        )
+
+    print("Running analysis...")
+    result = analyse_auth_log(
+        args.log, manifest_path=args.manifest, year=args.year, tz=args.tz, window=args.window
+    )
+    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit)
+    print(
+        f"Evidence {result.evidence.evidence_id} loaded. Model: {args.model}. "
+        f"Every answer is logged to {args.audit}."
+    )
+
+    def answer(question: str) -> None:
+        try:
+            a = analyst.ask(question)
+        except OllamaError as exc:
+            print(f"[error] {exc}")
+            return
+        print(f"\n{a.text}\n")
+        calls = ", ".join(f"{c.name}({json.dumps(c.arguments)})" for c in a.tool_calls)
+        print(f"[tools: {calls or 'none'}]")
+        print(f"[{a.verification.summary()}]\n")
+
+    if args.question:
+        answer(args.question)
+        return
+    print("Ask a question about the evidence (blank line or Ctrl-D to quit).")
+    while True:
+        try:
+            question = input("you> ").strip()
+        except EOFError:
+            break
+        if not question:
+            break
+        answer(question)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="marlowe", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -95,6 +148,18 @@ def main(argv: list[str] | None = None) -> None:
     ana.add_argument("--train-fraction", type=float, default=0.6)
     ana.add_argument("--contamination", type=float, default=0.02)
     ana.set_defaults(func=_cmd_analyse)
+
+    chat = sub.add_parser("chat", help="Ask Marlowe (local LLM via Ollama) about an auth.log")
+    chat.add_argument("log")
+    chat.add_argument("--year", type=int, required=True)
+    chat.add_argument("--tz", default="UTC")
+    chat.add_argument("--question", "-q", help="ask one question and exit")
+    chat.add_argument("--model", default=DEFAULT_MODEL)
+    chat.add_argument("--ollama-url", default=DEFAULT_URL)
+    chat.add_argument("--manifest", default="data/processed/evidence.manifest.jsonl")
+    chat.add_argument("--audit", default="data/processed/assistant_audit.jsonl")
+    chat.add_argument("--window", default="10min")
+    chat.set_defaults(func=_cmd_chat)
 
     args = parser.parse_args(argv)
     args.func(args)

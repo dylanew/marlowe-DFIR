@@ -22,7 +22,7 @@ Evidence files (logs, CSV, JSON)
                       + evaluation                     (marlowe.evaluation)
         |
         v
- 6. Assistant         local LLM calls approved         (marlowe.assistant)   <- step 3
+ 6. Assistant         local LLM calls approved         (marlowe.assistant)   <- built
                       analysis functions and explains
                       results with source references
 ```
@@ -39,10 +39,14 @@ Each stage only depends on the output of the stage before it, so a new log sourc
 
 **Dependencies are added when they are needed.** Runtime: numpy, pandas, scikit-learn. Notebook-only tools (JupyterLab, matplotlib) are an optional extra, `.[notebooks]`, so the core package stays light.
 
-**One pipeline function, many front ends.** `marlowe.pipeline.analyse_auth_log` is what the CLI and notebook call, and what the LLM assistant will call in step 3. Every interface gets the same tested behaviour.
+**One pipeline function, many front ends.** `marlowe.pipeline.analyse_auth_log` is what the CLI and notebook call, and what `marlowe chat` uses for the LLM assistant. Every interface gets the same tested behaviour.
 
 **Labels never touch the detectors.** Ground truth lives in a separate file and is joined only for evaluation.
 
 **Native Ollama, not Docker.** See [setup.md](setup.md): Docker on Apple Silicon has no GPU access.
 
 **CI on every push.** GitHub Actions runs ruff (lint and formatting) and pytest with coverage on Python 3.11 to 3.13.
+
+**The LLM gets tools, not data dumps.** Rather than pasting the log into the prompt, the model calls small read-only functions and gets bounded JSON back. This keeps answers grounded, keeps context small enough for a laptop, and gives a clear security boundary. See [assistant.md](assistant.md).
+
+**No Ollama SDK.** The client is about 80 lines of standard-library HTTP (`marlowe/assistant/ollama.py`). That means no extra dependency, and it's easy to test against a fake server.
