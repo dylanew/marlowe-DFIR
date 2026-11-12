@@ -120,3 +120,14 @@ def anomaly_scores(result: AnalysisResult) -> pd.DataFrame:
             "failed": w["n_failed"],
         }
     )
+
+
+def newest_first(chat: list[dict]) -> list[list[dict]]:
+    """Group a chat log into (question, answer) turns, most recent turn first."""
+    turns: list[list[dict]] = []
+    for entry in chat:
+        if entry["role"] == "user" or not turns:
+            turns.append([entry])
+        else:
+            turns[-1].append(entry)
+    return turns[::-1]

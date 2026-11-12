@@ -125,3 +125,14 @@ def test_noir_toggle_switches_the_persona(app):
     next(t for t in app.toggle if t.label == "Noir voice").set_value(False).run()
     assert not app.exception
     assert app.session_state["analyst"].persona is False
+
+
+def test_newest_first_keeps_each_question_with_its_answer():
+    chat = [
+        {"role": "user", "text": "q1"},
+        {"role": "assistant", "text": "a1"},
+        {"role": "user", "text": "q2"},
+        {"role": "assistant", "text": "a2"},
+    ]
+    turns = views.newest_first(chat)
+    assert [[e["text"] for e in t] for t in turns] == [["q2", "a2"], ["q1", "a1"]]

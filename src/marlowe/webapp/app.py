@@ -290,13 +290,12 @@ with ask:
                     with st.expander(f"Tools used ({len(entry['tools'])})"):
                         st.code("\n".join(entry["tools"]) or "none", language=None)
 
-        for entry in st.session_state.chat:
-            show(entry)
-
+        # Input first, then the conversation newest-first, so the box stays at the
+        # top and the latest answer is always right under it.
         prompt = "Ask about the evidence, e.g. 'Was there a brute-force attack?'"
-        if question := st.chat_input(prompt):
-            st.session_state.chat.append({"role": "user", "text": question})
-            show(st.session_state.chat[-1])
+        question = st.chat_input(prompt)
+        if question:
+            show({"role": "user", "text": question})
             waiting = st.empty()
             waiting.markdown(
                 effects.smoke_loader("Marlowe is examining the evidence..."),
@@ -309,13 +308,20 @@ with ask:
                 st.error(str(exc))
                 st.stop()
             waiting.empty()
-            entry = {
-                "role": "assistant",
-                "text": a.text,
-                "passed": a.verification.passed,
-                "check": a.verification.summary(),
-                "retried": bool(a.retries),
-                "tools": [f"{c.name}({json.dumps(c.arguments)})" for c in a.tool_calls],
-            }
-            st.session_state.chat.append(entry)
-            show(entry)
+            st.session_state.chat.append({"role": "user", "text": question})
+            st.session_state.chat.append(
+                {
+                    "role": "assistant",
+                    "text": a.text,
+                    "passed": a.verification.passed,
+                    "check": a.verification.summary(),
+                    "retried": bool(a.retries),
+                    "tools": [f"{c.name}({json.dumps(c.arguments)})" for c in a.tool_calls],
+                }
+            )
+            st.rerun()
+
+        for turn in views.newest_first(st.session_state.chat):
+            for entry in turn:
+                show(entry)
+            st.divider()
