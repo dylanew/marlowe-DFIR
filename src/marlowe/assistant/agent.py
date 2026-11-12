@@ -51,6 +51,9 @@ def _timestamps(text: str) -> set[str]:
     return {f"{d}T{t}" for d, t in _TIMESTAMP.findall(text)}
 
 
+_SUCCESS_WORDS = re.compile(
+    r"logged in|log in|logins?\b|success|compromis|gained access|got in|accepted", re.IGNORECASE
+)
 _FINDING_REF = re.compile(r"\bF\d{1,3}\b")
 # The prompt asks general answers to say so in these words. Requiring the
 # label means an unlabelled, uncited claim ("It was a brute force attack.")
@@ -94,6 +97,8 @@ class Verification:
     too_wide_citations: list[str] = field(default_factory=list)
     # Values a tool confirmed are NOT in the evidence and the answer says so.
     reported_absent: list[str] = field(default_factory=list)
+    # Flagged IPs the answer names without saying that they logged in.
+    missed_logins: list[str] = field(default_factory=list)
     # Timestamps (to the minute) that no tool returned.
     unknown_times: list[str] = field(default_factory=list)
     # True if the answer is labelled as general guidance and names nothing
@@ -113,6 +118,7 @@ class Verification:
             and not self.unverified_lines
             and not self.too_wide_citations
             and not self.unknown_times
+            and not self.missed_logins
             and not self.unknown_ips
             and not self.wrong_hashes
         )
@@ -150,6 +156,10 @@ class Verification:
             problems.append(f"lines not returned by any tool: {self.unverified_lines[:10]}")
         if self.unknown_ips:
             problems.append(f"IPs not in the evidence: {self.unknown_ips}")
+        if self.missed_logins:
+            problems.append(
+                "left out that an attacking IP logged in: " + "; ".join(self.missed_logins)
+            )
         if self.unknown_times:
             problems.append(f"timestamps not returned by any tool: {self.unknown_times[:5]}")
         if self.wrong_hashes:
@@ -301,6 +311,19 @@ def verify_answer(
     # An IP a tool confirmed is absent may be named, to say it is absent.
     known_ips = set(tools.events["src_ip"].dropna().unique()) | absent
     v.unknown_ips = sorted({ip for ip in _IPV4.findall(text) if ip not in known_ips})
+    # Completeness, for the single most important fact: a flagged IP that the
+    # answer discusses and that logged in successfully. Two real answers about
+    # the brute force said it "hadn't been very successful" when it got root.
+    flagged = set(tools.findings["src_ip"])
+    for ip in sorted({ip for ip in _IPV4.findall(text) if ip in flagged}):
+        logins = tools.successful_logins(ip)
+        users = sorted({x["user"] for x in logins})
+        said = _SUCCESS_WORDS.search(text) and any(u in text for u in users)
+        if logins and not said:
+            v.missed_logins.append(
+                f"{ip} logged in as {', '.join(users)} [line {logins[0]['line_no']}]"
+            )
+
     if seen_times is not None:
         v.unknown_times = sorted(_timestamps(text) - seen_times)
     v.general = bool(_GENERAL_LABEL.search(text)) and not (

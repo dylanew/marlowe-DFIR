@@ -37,6 +37,7 @@ def test_findings_table_matches_assistant_ids(analysis):
     assert table.at[0, "finding"] == "F1"
     assert table.at[0, "source IP"] == f1["src_ip"]
     assert table["anomaly score"].is_monotonic_decreasing
+    assert table.at[0, "IP ever logged in as"] == "root"  # the brute force got in
 
 
 def test_finding_lines_are_the_raw_evidence(analysis):

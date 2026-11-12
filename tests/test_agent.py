@@ -38,7 +38,9 @@ def test_tool_loop_and_grounded_answer(analysis, tmp_path):
         [
             tool_call("get_overview"),
             tool_call("get_log_lines", start_line=first, end_line=first + 2),
-            final(f"{ip} attempted many logins [lines {first}-{first + 2}]."),
+            final(
+                f"{ip} attempted many logins [lines {first}-{first + 2}], then logged in as root."
+            ),
         ]
     )
     audit = tmp_path / "audit.jsonl"
@@ -223,7 +225,7 @@ def test_replay_guessed_ip_failure_recovers(analysis):
             final("1. Insufficient evidence. No source IP appears to be a brute force."),
             tool_call("list_findings", limit=5),
             tool_call("ip_activity", src_ip=ip),
-            final(f"{ip} is the brute-force source [line {first}]."),
+            final(f"{ip} is the brute-force source [line {first}] and logged in as root."),
         ]
     )
     answer = Analyst(client, tools).ask("Which source IP looks most like a brute-force attack?")
@@ -310,7 +312,7 @@ def test_wide_citation_of_a_whole_finding_passes(analysis):
     client = FakeClient(
         [
             tool_call("get_finding", finding_id=f["finding_id"]),
-            final(f"{f['src_ip']} hammered the server [lines {lo}-{hi}]."),
+            final(f"{f['src_ip']} hammered the server [lines {lo}-{hi}] and got in as root."),
         ]
     )
     answer = Analyst(client, tools).ask(f"What is {f['finding_id']}?")
@@ -422,7 +424,8 @@ def test_replay_overview_only_answer_with_invented_line(analysis):
             final("There were 655 authentication failures in the log. [line 1234]"),
             tool_call("get_finding", finding_id="F1"),
             final(
-                f"{f1['src_ip']} made {f1['n_failed']} failed attempts [line {f1['line_nos'][0]}]."
+                f"{f1['src_ip']} made {f1['n_failed']} failed attempts "
+                f"[line {f1['line_nos'][0]}], then logged in as root."
             ),
         ]
     )
@@ -439,7 +442,8 @@ def test_finding_says_whether_the_ip_ever_got_in(analysis):
     tools = AnalysisTools(analysis)
     f1 = tools.get_overview()["top_findings"][0]
     assert f1["n_success"] == 0
-    assert f1["src_ip_ever_logged_in_as"] == ["root"]
+    assert [x["user"] for x in f1["src_ip_successful_logins"]] == ["root"]
+    assert "LOGGED IN SUCCESSFULLY as root" in f1["alert"]
 
 
 def test_replay_invented_end_time(analysis):
@@ -449,7 +453,7 @@ def test_replay_invented_end_time(analysis):
     f1 = tools.get_finding("F1")
     lo, hi = f1["line_range"].split("-")
     start = f1["window_start_utc"]
-    claim = f"{f1['src_ip']} failed {f1['n_failed']} times"
+    claim = f"{f1['src_ip']} failed {f1['n_failed']} times, then logged in as root,"
     bad = f"{claim} between {start} and 2026-10-14T17:40 [lines {lo}-{hi}]."
     good = f"{claim} from {start} [lines {lo}-{hi}]."
     client = FakeClient([tool_call("get_finding", finding_id="F1"), final(bad), final(good)])
@@ -458,3 +462,29 @@ def test_replay_invented_end_time(analysis):
     retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
     assert "2026-10-14T17:40" in retry
     assert answer.verification.passed
+
+
+def test_replay_missed_root_login(analysis):
+    """Real answer (twice): F1 and F4 listed, "the attackers haven't been very
+    successful", no mention that 203.0.113.62 logged in as root. It must fail,
+    and the retry must say exactly what was left out."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    ip, rng = f1["src_ip"], f1["line_range"]
+    root = tools.successful_logins(ip)[0]["line_no"]
+    client = FakeClient(
+        [
+            tool_call("get_finding", finding_id="F1"),
+            final(f"Persistent but unsuccessful brute force from {ip} [lines {rng}]."),
+            final(
+                f"{ip} brute-forced the server [lines {rng}] and then logged in as root "
+                f"[line {root}]. Treat it as compromised."
+            ),
+        ]
+    )
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    first = answer.first_attempt_text
+    assert "unsuccessful" in first and not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert f"{ip} logged in as root [line {root}]" in retry
+    assert answer.verification.passed, answer.verification.summary()

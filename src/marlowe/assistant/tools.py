@@ -104,9 +104,12 @@ class AnalysisTools:
         self.result = result
         self.events = result.events.set_index("line_no", drop=False)
         ok = self.events[self.events["event_type"] == "auth_success"]
-        self._logins_by_ip: dict[str, list[str]] = {
-            ip: sorted(users.dropna().unique().tolist())
-            for ip, users in ok.groupby("src_ip")["user"]
+        self._logins_by_ip: dict[str, list[dict[str, Any]]] = {
+            ip: [
+                {"user": r["user"], "time_utc": _iso(r["timestamp_utc"]), "line_no": int(n)}
+                for n, r in rows.iterrows()
+            ]
+            for ip, rows in ok.groupby("src_ip")
         }
         # Stable finding IDs: F1 is the most anomalous flagged window.
         w = result.windows
@@ -294,10 +297,28 @@ class AnalysisTools:
             "evidence_id": row["evidence_id"],
             "line_range": _line_range(row["line_nos"]),
             # Across the whole log, not just this window: a brute force whose
-            # success lands in the next window is the most important fact, and
-            # a real answer missed it when only the window was shown.
-            "src_ip_ever_logged_in_as": self._logins_by_ip.get(row["src_ip"], []),
+            # success lands in the next window is the most important fact.
+            # llama3.1:8b skipped a plain list of usernames twice, so a flagged
+            # IP that got in also gets a sentence it can't easily miss.
+            "src_ip_successful_logins": self.successful_logins(row["src_ip"])[:5],
+            **({"alert": self._alert(row["src_ip"])} if self._alert(row["src_ip"]) else {}),
         }
+
+    def successful_logins(self, ip: str) -> list[dict[str, Any]]:
+        """Every successful login from ``ip`` anywhere in the log."""
+        return self._logins_by_ip.get(ip, [])
+
+    def _alert(self, ip: str) -> str | None:
+        logins = self.successful_logins(ip)
+        if not logins:
+            return None
+        first = logins[0]
+        users = sorted({x["user"] for x in logins})
+        return (
+            f"{ip} LOGGED IN SUCCESSFULLY as {', '.join(users)} (first at {first['time_utc']}, "
+            f"line {first['line_no']}). If this IP was attacking, treat it as a likely "
+            "compromise and say so first."
+        )
 
     def list_findings(self, limit: int = 10, detector: str = "any") -> dict[str, Any]:
         f = self.findings

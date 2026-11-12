@@ -82,11 +82,24 @@ def findings_table(result: AnalysisResult) -> pd.DataFrame:
             "failed": f["n_failed"],
             "success": f["n_success"],
             "users tried": f["n_distinct_users"],
+            "IP ever logged in as": f["src_ip"].map(_logins_by_ip(result)).fillna(""),
             "why (rules)": f["rule_reasons"],
             "why (model)": f["if_reasons"],
             "lines": f["line_nos"].map(lambda n: f"{n[0]}-{n[-1]}" if len(n) > 1 else str(n[0])),
         }
     )
+
+
+def _logins_by_ip(result: AnalysisResult) -> dict[str, str]:
+    """Successful logins per IP across the whole log, e.g. {"203.0.113.62": "root"}.
+
+    A brute force's success often lands just after the flagged window, so the
+    table shows it per IP rather than per window.
+    """
+    ok = result.events[result.events["event_type"] == "auth_success"]
+    return {
+        ip: ", ".join(sorted(users.dropna().unique())) for ip, users in ok.groupby("src_ip")["user"]
+    }
 
 
 def finding_lines(result: AnalysisResult, finding_index: int, max_lines: int = 40) -> pd.DataFrame:
