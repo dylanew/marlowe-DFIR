@@ -24,20 +24,26 @@ Every finding Marlowe reports should trace back to a computed result and the sou
 
 ## Quick start
 
-Requires Python 3.11+. From the repository root:
+Requires Python 3.11+. The Python that ships with macOS is too old, so on a Mac run `brew install python@3.12` first and use `python3.12` below. If you paste these blocks into zsh (the macOS default shell), run `setopt interactivecomments` first so the `#` comment lines are ignored. From the repository root:
 
 ```bash
-python3 -m venv .venv          # create an isolated environment for this project
-source .venv/bin/activate      # activate it (run this in every new terminal)
-pip install -e ".[dev]"        # install Marlowe in editable mode, plus test/lint tools
-pytest                         # run the test suite
-ruff check . && ruff format --check .   # lint and formatting checks (same as CI)
+# create an isolated environment for this project
+python3.12 -m venv .venv
+# activate it (run this in every new terminal)
+source .venv/bin/activate
+# install Marlowe in editable mode, plus test/lint tools
+pip install -e ".[dev]"
+# run the test suite
+pytest
+# lint and formatting checks (same as CI)
+ruff check . && ruff format --check .
 ```
 
 ### Run the analysis
 
 ```bash
-marlowe generate --out data/sample          # (re)create the synthetic log + labels (seed 42)
+# (re)create the synthetic log + labels (seed 42)
+marlowe generate --out data/sample
 marlowe analyse data/sample/auth.log --year 2026 --labels data/sample/auth_labels.csv
 ```
 

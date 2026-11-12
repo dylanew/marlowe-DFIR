@@ -25,10 +25,13 @@ investigator question
 ## Try it (on your Mac)
 
 ```bash
-ollama pull llama3.1:8b                                   # ~5 GB, once
-marlowe chat data/sample/auth.log --year 2026             # interactive
+# ~5 GB, once
+ollama pull llama3.1:8b
+# interactive
+marlowe chat data/sample/auth.log --year 2026
 marlowe chat data/sample/auth.log --year 2026 -q "What is the most serious finding?"
-marlowe chat ... --model qwen2.5:7b                      # any installed tool-capable model
+# any installed tool-capable model
+marlowe chat ... --model qwen2.5:7b
 ```
 
 Each answer is followed by the tools the model called and the result of the grounding check.
@@ -66,7 +69,8 @@ The default is `llama3.1:8b` (override with `--model` or `MARLOWE_MODEL`). On 16
 Don't guess; measure:
 
 ```bash
-ollama pull llama3.1:8b && ollama pull qwen2.5:7b        # pick 2–3 candidates
+# pick 2–3 candidates
+ollama pull llama3.1:8b && ollama pull qwen2.5:7b
 python scripts/benchmark_models.py llama3.1:8b qwen2.5:7b
 ```
 

@@ -17,11 +17,16 @@ Marlowe's Python code talks to Ollama over its local HTTP API (`http://localhost
 ### Install (macOS)
 
 ```bash
-brew install ollama            # or download the app from https://ollama.com
-ollama serve                   # start the server (the macOS app does this automatically)
-ollama pull llama3.1:8b        # default model (~5 GB); see docs/assistant.md for choosing others
-ollama list                    # show installed models
-curl http://localhost:11434/api/tags   # check the API is reachable
+# or download the app from https://ollama.com
+brew install ollama
+# start the server (the macOS app does this automatically)
+ollama serve
+# default model (~5 GB); see docs/assistant.md for choosing others
+ollama pull llama3.1:8b
+# show installed models
+ollama list
+# check the API is reachable
+curl http://localhost:11434/api/tags
 ```
 
 **Model sizing on 16 GB RAM:** a model of about 7 to 8 billion parameters at 4-bit quantisation needs roughly 5 to 6 GB, which leaves room for the OS and our analysis code. Larger models will swap and become unusably slow. Use `scripts/benchmark_models.py` to compare candidates on Marlowe's own questions instead of guessing.
@@ -44,7 +49,10 @@ docker run -d -p 3000:8080 \
 If you previously installed these and want to find or remove them:
 
 ```bash
-which ollama; ollama list                   # native Ollama, if installed
-docker ps -a                                # any Ollama / Open WebUI containers
-docker volume ls                            # their data volumes
+# native Ollama, if installed
+which ollama; ollama list
+# any Ollama / Open WebUI containers
+docker ps -a
+# their data volumes
+docker volume ls
 ```
