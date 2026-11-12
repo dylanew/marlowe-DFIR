@@ -57,11 +57,16 @@ class Verification:
     unknown_ips: list[str] = field(default_factory=list)
     wrong_hashes: list[str] = field(default_factory=list)
     has_citations: bool = False
+    # Tool calls that returned an error, as "tool: message". An answer built
+    # only on failed calls must not pass, however it is worded.
+    tool_errors: list[str] = field(default_factory=list)
+    no_successful_tool_result: bool = False
 
     @property
     def passed(self) -> bool:
         return (
-            self.has_citations
+            not self.no_successful_tool_result
+            and self.has_citations
             and not self.unverified_lines
             and not self.unknown_ips
             and not self.wrong_hashes
@@ -71,6 +76,8 @@ class Verification:
         if self.passed:
             return f"Grounding check passed: {len(self.cited_lines)} cited lines all verified."
         problems = []
+        if self.no_successful_tool_result:
+            problems.append("answered without any successful tool result")
         if not self.has_citations:
             problems.append("no line citations")
         if self.unverified_lines:
@@ -144,17 +151,32 @@ def _contains_raw_lines(payload: Any) -> bool:
 
 
 def _retry_message(v: Verification) -> str:
-    return (
+    msg = (
         "[Automated evidence check, not the investigator] Your previous answer failed "
         f"verification: {v.summary().removeprefix('Grounding check FAILED: ')}. "
-        "Rewrite the answer. Cite the line numbers that tools returned, as [line N] or "
-        "[lines N-M]. If you need the source text, call get_log_lines. Remove any IP "
-        "address, hash or line number that no tool returned. Do not add new claims."
+    )
+    if v.tool_errors:
+        msg += (
+            "These tool calls failed: "
+            + "; ".join(v.tool_errors[:5])
+            + ". A failed call is not evidence that something did not happen. Follow the "
+            "hints in the errors and call the right tool BEFORE answering. "
+        )
+    return msg + (
+        "Then rewrite the answer. Cite the line numbers that tools returned, as [line N] "
+        "or [lines N-M]. Remove any IP address, hash or line number that no tool returned."
     )
 
 
-def verify_answer(text: str, tools: AnalysisTools, referenced_lines: set[int]) -> Verification:
-    v = Verification()
+def verify_answer(
+    text: str,
+    tools: AnalysisTools,
+    referenced_lines: set[int],
+    tool_errors: list[str] | None = None,
+    n_successful_tool_results: int | None = None,
+) -> Verification:
+    v = Verification(tool_errors=list(tool_errors or []))
+    v.no_successful_tool_result = n_successful_tool_results == 0
     for match in _CITATION.finditer(text):
         v.cited_lines.extend(_parse_line_refs(match.group(1)))
     v.cited_lines = sorted(set(v.cited_lines))
@@ -183,6 +205,9 @@ class Analyst:
         self.max_steps = max_steps
         self.max_retries = max_retries
         self._saw_raw_evidence = False
+        self._tool_errors: list[str] = []
+        self._n_ok = 0
+        self._n_ok_before = 0  # successful tool results from earlier questions
         self.audit_path = Path(audit_path) if audit_path else None
         self.history: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.referenced_lines: set[int] = set()
@@ -222,6 +247,10 @@ class Analyst:
                 result = self.tools.call(name, args)
                 try:
                     payload = json.loads(result)
+                    if isinstance(payload, dict) and "error" in payload:
+                        self._tool_errors.append(f"{name}: {payload['error']}")
+                    else:
+                        self._n_ok += 1
                     self.referenced_lines |= _lines_in_tool_output(payload)
                     if _contains_raw_lines(payload):
                         self._saw_raw_evidence = True
@@ -234,9 +263,11 @@ class Analyst:
         self.history.append({"role": "user", "content": question})
         records: list[ToolCallRecord] = []
         self._saw_raw_evidence = False
+        self._tool_errors: list[str] = []
+        self._n_ok = 0
 
         text, steps, hit_limit = self._run_tools_loop(records)
-        verification = verify_answer(text, self.tools, self.referenced_lines)
+        verification = self._verify(text)
         first_passed, first_text, retries = verification.passed, text, 0
 
         # Verify, then retry: a failed grounding check goes back to the model
@@ -247,7 +278,7 @@ class Analyst:
             self.history.append({"role": "user", "content": _retry_message(verification)})
             text, more_steps, hit_limit = self._run_tools_loop(records)
             steps += more_steps
-            verification = verify_answer(text, self.tools, self.referenced_lines)
+            verification = self._verify(text)
 
         answer = Answer(
             question=question,
@@ -263,7 +294,14 @@ class Analyst:
             saw_raw_evidence=self._saw_raw_evidence,
         )
         self._audit(answer)
+        self._n_ok_before += self._n_ok
         return answer
+
+    def _verify(self, text: str) -> Verification:
+        # Successful results from earlier questions in the conversation count too:
+        # the model may legitimately answer a follow-up from what it already has.
+        n_ok = self._n_ok + self._n_ok_before
+        return verify_answer(text, self.tools, self.referenced_lines, self._tool_errors, n_ok)
 
     def _audit(self, answer: Answer) -> None:
         """Append-only record of what was asked, which tools ran and what was said."""

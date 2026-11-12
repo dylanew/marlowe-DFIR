@@ -41,7 +41,16 @@ class ToolError(Exception):
 
     Anything else is a bug in our code and is allowed to raise, so it can't
     hide behind an innocent-looking "error" message to the model.
+
+    ``details`` makes the error *recoverable*. Benchmarking showed that a small
+    model which guesses an IP (e.g. 192.168.1.100) and gets a bare "not found"
+    will conclude there is no attack. So errors return the real candidates and
+    the next tool to call.
     """
+
+    def __init__(self, message: str, **details: Any):
+        super().__init__(message)
+        self.details = details
 
 
 @dataclass(frozen=True)
@@ -61,6 +70,12 @@ class Tool:
                 "parameters": self.parameters,
             },
         }
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
 
 
 def _as_int(value: Any, name: str) -> int:
@@ -154,6 +169,21 @@ class AnalysisTools:
                     self.ip_activity,
                 ),
                 Tool(
+                    "list_logins",
+                    "Successful logins across ALL users, optionally only off-hours "
+                    "(before 07:00 or from 20:00 UTC) and/or only from a source IP the "
+                    "user had never logged in from before. Includes the raw log lines.",
+                    {
+                        "type": "object",
+                        "properties": {
+                            "off_hours_only": {"type": "boolean"},
+                            "new_source_only": {"type": "boolean"},
+                            "limit": {"type": "integer", "description": "max rows (<= 25)"},
+                        },
+                    },
+                    self.list_logins,
+                ),
+                Tool(
                     "user_activity",
                     "Login history for one username: successes, failures, source IPs "
                     "and off-hours logins.",
@@ -186,11 +216,21 @@ class AnalysisTools:
         try:
             inspect.signature(func).bind(**(arguments or {}))
         except TypeError as exc:
-            return json.dumps({"error": f"bad arguments for {name}: {exc}"})
+            return json.dumps(
+                {
+                    "error": f"bad arguments for {name}: {exc}",
+                    "valid_parameters": self.tools[name].parameters.get("properties", {}),
+                    "available_tools": list(self.tools),
+                    "hint": "Retry with only the valid parameters, or pick a tool that does "
+                    "what you need (e.g. list_logins for logins across all users). Never "
+                    "answer from a failed tool call.",
+                },
+                default=str,
+            )
         try:
             return json.dumps(func(**(arguments or {})), default=str)
         except ToolError as exc:
-            return json.dumps({"error": str(exc)})
+            return json.dumps({"error": str(exc), **exc.details}, default=str)
 
     # --------------------------------------------------------------------- tools
 
@@ -305,7 +345,12 @@ class AnalysisTools:
     def ip_activity(self, src_ip: str) -> dict[str, Any]:
         ev = self.events[self.events["src_ip"] == src_ip]
         if ev.empty:
-            raise ToolError(f"IP {src_ip} does not appear in the log")
+            raise ToolError(
+                f"IP {src_ip} does not appear in the log. Do not guess IP addresses.",
+                flagged_ips=list(dict.fromkeys(self.findings["src_ip"]))[:15],
+                hint="Call list_findings to see which IPs were flagged, then retry "
+                "ip_activity with one of those.",
+            )
         flagged = self.findings[self.findings["src_ip"] == src_ip]
         return {
             "src_ip": src_ip,
@@ -330,7 +375,17 @@ class AnalysisTools:
             & self.events["event_type"].isin(["auth_success", "auth_failure", "invalid_user"])
         ]
         if ev.empty:
-            raise ToolError(f"user '{user}' has no authentication events")
+            raise ToolError(
+                f"user '{user}' has no authentication events. Do not guess usernames.",
+                known_users=sorted(
+                    self.events.loc[self.events["event_type"] == "auth_success", "user"]
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )[:30],
+                hint="To find logins across all users (e.g. off-hours or from new "
+                "addresses), call list_logins instead.",
+            )
         succ = ev[ev["event_type"] == "auth_success"]
         hours = succ["timestamp_utc"].dt.hour
         return {
@@ -348,5 +403,45 @@ class AnalysisTools:
                     "src_ip": r["src_ip"],
                 }
                 for _, r in succ[(hours < 7) | (hours >= 20)].head(10).iterrows()
+            ],
+        }
+
+    def list_logins(
+        self, off_hours_only: Any = False, new_source_only: Any = False, limit: Any = 20
+    ) -> dict[str, Any]:
+        off_only, new_only = _as_bool(off_hours_only), _as_bool(new_source_only)
+        limit = max(1, min(_as_int(limit, "limit"), MAX_FINDINGS))
+        succ = self.events[self.events["event_type"] == "auth_success"].sort_index()
+        hours = succ["timestamp_utc"].dt.hour
+        off = (hours < 7) | (hours >= 20)
+        new = ~succ.duplicated(["user", "src_ip"])
+        mask = pd.Series(True, index=succ.index)
+        if off_only:
+            mask &= off
+        if new_only:
+            mask &= new
+        rows = succ[mask]
+        return {
+            "filters": {"off_hours_only": off_only, "new_source_only": new_only},
+            "total": int(len(rows)),
+            "returned": int(min(limit, len(rows))),
+            "note": (
+                "'New source' means the first successful login for that user from that IP "
+                "in this log, so every login on the log's first day counts as new."
+            ),
+            "logins": [
+                {
+                    "line_no": int(r["line_no"]),
+                    "time_utc": _iso(r["timestamp_utc"]),
+                    "user": r["user"],
+                    "src_ip": r["src_ip"],
+                    "off_hours": bool(off[i]),
+                    "new_source": bool(new[i]),
+                }
+                for i, r in rows.head(limit).iterrows()
+            ],
+            "untrusted_log_lines": [
+                {"line_no": int(r["line_no"]), "text": r["raw"]}
+                for _, r in rows.head(limit).iterrows()
             ],
         }

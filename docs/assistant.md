@@ -45,6 +45,7 @@ Each answer is followed by the tools the model called and the result of the grou
 | `get_finding` | every feature value for one finding, plus its line numbers |
 | `get_log_lines` | raw lines by number (max 40), under `untrusted_log_lines` |
 | `ip_activity` | everything one source IP did: counts, usernames tried, successful logins, findings |
+| `list_logins` | successful logins across all users, optionally only off-hours and/or only from a never-before-used source, with raw lines |
 | `user_activity` | one user's logins, source IPs, login hours and off-hours successes |
 
 ## Safety and trust design
@@ -58,6 +59,7 @@ Each answer is followed by the tools the model called and the result of the grou
 | Ground truth leaking into the answer | On synthetic data the labels exist, but no tool exposes them, and a test checks this. Marlowe reasons from the same information a real analyst would have. |
 | Runaway tool loops | Capped at 8 steps per question. |
 | The model doesn't look at the source evidence | `get_finding` and `ip_activity` include a few representative raw lines (`sample_evidence`): the first lines, any successful logins and the last line. The model sees the source without having to remember to ask for it. |
+| The model guesses an identifier, the lookup fails, and it concludes "nothing happened" | Lookup errors are **recoverable**: an unknown IP returns the flagged IPs, an unknown user returns the known users, and invented parameters return the valid ones, each with a hint naming the right tool. An answer built only on failed tool calls **fails** the grounding check, and the retry message says that a failed call is not evidence of absence. |
 | An ungrounded answer reaches the investigator | **Verify, then retry:** if the grounding check fails, the answer goes back to the model once with the specific problems. The note is labelled as coming from the automated checker, not the investigator. Both attempts are kept in the audit log, and the CLI says when a retry happened. |
 | Bugs disguised as "tool errors" | Only expected problems (`ToolError`, invalid arguments) go back to the model. Anything else raises, so it gets fixed. |
 | Accountability | Every question, the tool calls and their arguments, the answer and the grounding result go to an append-only audit log (`data/processed/assistant_audit.jsonl`) with the model name and prompt version. |
@@ -83,12 +85,34 @@ The script asks 5 fixed questions per model and records latency, tool calls, gro
 | llama3.1:8b | step 3 (prompt only) | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; 5.0–36.6 s per answer |
 | llama3.1:8b | step 3b, sample evidence only (`--retries 0`) | 16.9 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | |
 | llama3.1:8b | step 3b, sample evidence + 1 retry | 25.0 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | same 2 questions failed; retry did not fix them |
+| llama3.1:8b | step 3c, recoverable errors + `list_logins` + prompt v2 | *to run* | | | | | |
 
 **Step 3b result: no measurable improvement.** The same two questions failed in every configuration. Two things the numbers show:
 - **Sample evidence rarely reaches the model** (1 answer in 5). With about 1.2 tool calls per question, the model mostly stops after `get_overview` or `list_findings`, and neither of those returns raw lines. The evidence was added to the tools the model *doesn't* call.
 - **The retry runs but doesn't fix the answer.** For the failing questions it took a few seconds longer with a retry than without, so the model was asked again and produced another ungrounded answer.
 
 The benchmark now writes every answer, tool sequence and grounding failure to `data/processed/benchmark_audit.jsonl` and prints the failures, so the next change can be based on *why* those two questions fail rather than on a guess.
+
+### Step 3c: error analysis of the two failures
+
+The audit log showed that both failures had the same root cause. **The model skipped discovery and called a lookup tool with a guessed argument:**
+
+| Question | What the model did | Result |
+|---|---|---|
+| Which IP looks most like a brute force? | `ip_activity(src_ip="192.168.1.100")`, an invented private IP | "not found" error → answered **"No source IP appears to be attempting a brute-force attack"**. This is a false negative on the most serious incident in the data. |
+| Off-hours logins from new addresses? | `user_activity(user="all", off_hours="True", new_addresses="True")`, invented parameters | "bad arguments" error → "there are no successful logins…". On retry it added a made-up `[line 1]` citation. |
+
+The first failure is the dangerous kind: **an absence-of-evidence claim built on a failed tool call.** The grounding check did catch both answers, but only as "no citations". It didn't recognise the actual problem, so the retry couldn't fix it.
+
+The second also revealed a **capability gap**: no tool answered "logins across all users with filters", so the model invented one.
+
+Changes:
+1. **Recoverable errors:** see the safety table above. Errors return the real candidates and the next tool to call.
+2. **`list_logins`:** a new tool for the question the model was trying to ask. It surfaces all three injected stolen-credential logins.
+3. **Failed calls can't support an answer:** if no tool call succeeded, the answer fails grounding ("answered without any successful tool result"). The retry message lists the failed calls and says a failure is not evidence of absence.
+4. **Prompt v2:** never guess identifiers; discover them first; a failed call is not evidence.
+
+Both real failures are replayed as tests (`tests/test_agent.py::test_replay_*`).
 
 Use `--retries 0` to measure the effect of sample evidence alone, without retries.
 

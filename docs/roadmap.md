@@ -31,11 +31,18 @@ Follow-ups identified by the error analysis:
 - Deterministic grounding check and an append-only audit log
 - Benchmarked llama3.1:8b: correct answers but it rarely checks the raw evidence (see `docs/assistant.md`)
 
-## Step 3b: Safeguards in code (current)
+## Step 3b: Safeguards in code (done)
 
 - Sample raw evidence included in `get_finding` and `ip_activity`
 - Verify-then-retry when the grounding check fails
-- Re-run the benchmark to measure the effect against the step 3 baseline
+- Result: no measurable improvement; error analysis showed the real cause
+
+## Step 3c: Recoverable tool errors (current)
+
+- Errors return real candidates and next-step hints; new `list_logins` tool
+- An answer built only on failed tool calls fails grounding
+- Prompt v2: discover identifiers, never guess them
+- Re-run the benchmark against the step 3 and 3b baselines
 
 ## Step 4: Portfolio presentation
 

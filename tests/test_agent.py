@@ -206,3 +206,62 @@ def test_citation_styles_real_models_use(analysis):
     v = verify_answer("as shown on line 99999", tools, set(range(1, 2000)))
     assert v.unverified_lines == [99999]
     assert not v.passed
+
+
+def test_replay_guessed_ip_failure_recovers(analysis):
+    """Replays a real llama3.1:8b failure: it guessed an IP, got an error and
+    concluded there was no brute force. That answer must fail, and the retry
+    message must tell the model why and how to recover."""
+    tools = AnalysisTools(analysis)
+    ip = tools.get_finding("F1")["src_ip"]
+    first = tools.get_finding("F1")["line_nos"][0]
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="192.168.1.100"),
+            final("1. Insufficient evidence. No source IP appears to be a brute force."),
+            tool_call("list_findings", limit=5),
+            tool_call("ip_activity", src_ip=ip),
+            final(f"{ip} is the brute-force source [line {first}]."),
+        ]
+    )
+    answer = Analyst(client, tools).ask("Which source IP looks most like a brute-force attack?")
+    assert not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert "answered without any successful tool result" in retry
+    assert "ip_activity: IP 192.168.1.100 does not appear" in retry
+    assert "not evidence that something did not happen" in retry
+    assert answer.verification.passed
+    assert answer.saw_raw_evidence
+
+
+def test_replay_invented_arguments_failure(analysis):
+    """Replays the second real failure: invented parameters, then a fake [line 1]."""
+    tools = AnalysisTools(analysis)
+    client = FakeClient(
+        [
+            tool_call("user_activity", user="all", off_hours="True", new_addresses="True"),
+            final("No logins. The tool call failed [line 1]."),
+            final("Still nothing [line 1]."),
+        ]
+    )
+    answer = Analyst(client, tools).ask("Any off-hours logins from new addresses?")
+    v = answer.verification
+    assert not v.passed
+    assert v.no_successful_tool_result
+    assert v.unverified_lines == [1]
+    assert any("unexpected keyword argument" in e for e in v.tool_errors)
+
+
+def test_follow_up_can_use_earlier_tool_results(analysis):
+    tools = AnalysisTools(analysis)
+    client = FakeClient(
+        [
+            tool_call("get_log_lines", start_line=1, end_line=3),
+            final("Cron ran [line 1]."),
+            final("As I said, cron ran [line 1]."),
+        ]
+    )
+    analyst = Analyst(client, tools)
+    analyst.ask("what happened first?")
+    second = analyst.ask("say that again")
+    assert second.verification.passed  # no new tool call needed for a follow-up

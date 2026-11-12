@@ -29,6 +29,7 @@ def test_schemas_are_valid_tool_definitions(tools):
         "get_log_lines",
         "ip_activity",
         "user_activity",
+        "list_logins",
     }
 
 
@@ -110,3 +111,38 @@ def test_sample_evidence_is_bounded_and_includes_successes(tools, analysis):
 
     ip = call(tools, "ip_activity", src_ip=finding["src_ip"])
     assert ip["sample_evidence"]["untrusted_log_lines"]
+
+
+def test_lookup_errors_are_recoverable(tools):
+    # Real failure from the llama3.1:8b benchmark: it guessed this IP.
+    out = call(tools, "ip_activity", src_ip="192.168.1.100")
+    assert "does not appear" in out["error"]
+    assert "203.0.113.62" in out["flagged_ips"]
+    assert "list_findings" in out["hint"]
+
+    out = call(tools, "user_activity", user="all")
+    assert "alice" in out["known_users"]
+    assert "list_logins" in out["hint"]
+
+
+def test_bad_arguments_list_valid_parameters(tools):
+    # Real failure from the benchmark: invented parameters.
+    out = json.loads(
+        tools.call("user_activity", {"user": "all", "off_hours": "True", "new_addresses": "True"})
+    )
+    assert "unexpected keyword argument" in out["error"]
+    assert set(out["valid_parameters"]) == {"user"}
+    assert "list_logins" in out["available_tools"]
+
+
+def test_list_logins_filters_and_finds_off_hours_compromises(tools):
+    allx = call(tools, "list_logins", limit=25)
+    assert allx["total"] > 100 and allx["returned"] == 25
+    assert len(allx["untrusted_log_lines"]) == 25
+
+    # String booleans are accepted, because models send them.
+    out = call(tools, "list_logins", off_hours_only="True", new_source_only=True)
+    assert all(r["off_hours"] and r["new_source"] for r in out["logins"])
+    ips = {r["src_ip"] for r in out["logins"]}
+    # The three injected stolen-credential logins use these documentation-range IPs.
+    assert {"203.0.113.36", "203.0.113.88", "203.0.113.101"} <= ips
