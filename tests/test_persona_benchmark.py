@@ -1,7 +1,9 @@
 """The personality-slider benchmark: voice measures, statistics and a full offline run."""
 
+import json
 import math
 
+import pandas as pd
 import pytest
 
 from marlowe.assistant import AnalysisTools, Analyst
@@ -10,7 +12,9 @@ from marlowe.evaluation.persona import (
     ABSENT_IP,
     QUESTIONS,
     PersonaBenchmark,
+    done_keys,
     evidence_section,
+    rows_from_audit,
     summarise_by_level,
     voice_metrics,
     wilson_interval,
@@ -183,3 +187,46 @@ def test_benchmark_records_errors_and_carries_on(analysis):
     assert (df["error"] == "Ollama went away").all()
     summary = summarise_by_level(df)
     assert list(summary["errors"]) == [len(QUESTIONS)] * 2
+
+
+def test_a_stopped_run_resumes_without_asking_again(analysis, bench):
+    first = bench.run([0], model="fake")
+    asked = []
+
+    def make_analyst(level):
+        asked.append(level)
+        return Analyst(VoicedFakeLLM(level, analysis), AnalysisTools(analysis), persona=level)
+
+    failed = first.copy()
+    failed.loc[0, "error"] = "timed out"  # a timed-out answer is asked again
+    resumed = PersonaBenchmark(make_analyst, bench.facts, done=done_keys(failed))
+    df = resumed.run([0, 1], model="fake")
+    assert asked == [0] + [1] * len(QUESTIONS)
+    assert df.iloc[0]["question"] == QUESTIONS[0].text
+    assert done_keys(pd.DataFrame()) == set()
+
+
+def test_results_rebuilt_from_the_audit_log_match_the_live_run(analysis, tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    tools = AnalysisTools(analysis)
+    ip = tools.findings.iloc[0]["src_ip"]
+    facts = {"top_ip": ip, "top_user": tools.successful_logins(ip)[0]["user"]}
+
+    def make_analyst(level):
+        return Analyst(
+            VoicedFakeLLM(level, analysis), AnalysisTools(analysis), persona=level, audit_path=audit
+        )
+
+    live = PersonaBenchmark(make_analyst, facts).run([0, 4], model="fake-voiced")
+    # An older record without persona_level (from before the slider) is ignored.
+    with audit.open("a") as f:
+        f.write(json.dumps({"model": "fake-voiced", "question": QUESTIONS[0].text}) + "\n")
+
+    rebuilt = rows_from_audit(audit, facts)
+    cols = ["persona_level", "question", "grounded", "first_attempt_grounded", "correct"]
+    cols += ["voice_score", "evidence_leaks", "tool_calls", "retries"]
+    pd.testing.assert_frame_equal(
+        rebuilt[cols].reset_index(drop=True), live[cols].reset_index(drop=True), check_dtype=False
+    )
+    assert rebuilt["seconds"].isna().all()  # latency isn't in the audit log
+    assert rows_from_audit(audit, facts, since="2999-01-01").empty

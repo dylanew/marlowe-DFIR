@@ -109,6 +109,13 @@ The question is a dose-response one: **does grounding get worse as the character
 python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4 --out data/processed/bench_persona.csv
 ```
 
+**It is slow.** On an M4 MacBook Air (16 GB) with llama3.1:8b, answers took 20 s to nearly 5 min each, around 2.5 min on average, so the full 40 answers take 1.5 to 2 hours. Each line it prints is one answer, so a long run of lines is progress, not a loop. To make that manageable:
+
+- The results CSV is rewritten after every answer, so stopping early loses nothing. `--resume` carries on from it, skipping answers already done and asking again any that errored.
+- `--questions 1 2 6 8` asks a subset (`--list-questions` shows the numbers). For example, `--levels 0 2 4 --questions 1 2 6 8` takes 12 answers, about 30 minutes.
+- `--timeout` (default 600 s) is how long to wait for one model reply. The original 300 s cut off at least one slow answer.
+- `--from-audit` rebuilds the CSV from `benchmark_audit.jsonl` without asking the model again, which rescues a run stopped before it saved anything. Add `--since 2026-11-12T21:00` (UTC) to leave out earlier runs. Latency isn't in the audit log, so it's left blank.
+
 It asks 8 questions per level (`QUESTIONS` in `marlowe/evaluation/persona.py`): the 5 from the model benchmark, plus "was root compromised?", one about an IP that isn't in the log (the right answer is that it isn't there), and one general question (the right answer keeps the "General guidance" label). For each answer it records:
 
 - **Grounding**, first try and after the retry, using the same check as the app.

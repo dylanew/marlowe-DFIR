@@ -23,10 +23,12 @@ judge could not be.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -230,6 +232,9 @@ class PersonaBenchmark:
     questions: Iterable[BenchmarkQuestion] = QUESTIONS
     on_row: Callable[[dict[str, Any]], None] | None = None
     rows: list[dict[str, Any]] = field(default_factory=list)
+    # (model, level, repeat, question) already answered, e.g. by an earlier run
+    # that was stopped. They are skipped, so a long run can be resumed.
+    done: set[tuple[Any, int, int, str]] = field(default_factory=set)
 
     def run(self, levels: Iterable[int], repeats: int = 1, **extra: Any) -> pd.DataFrame:
         import time
@@ -237,6 +242,8 @@ class PersonaBenchmark:
         for level in levels:
             for repeat in range(repeats):
                 for q in self.questions:
+                    if (extra.get("model"), level, repeat, q.text) in self.done:
+                        continue
                     base = {**extra, "persona_level": level, "repeat": repeat}
                     analyst = self.make_analyst(level)
                     start = time.perf_counter()
@@ -255,6 +262,83 @@ class PersonaBenchmark:
                     if self.on_row:
                         self.on_row(row)
         return pd.DataFrame(self.rows)
+
+
+def done_keys(df: pd.DataFrame) -> set[tuple[Any, int, int, str]]:
+    """The answers in an earlier results table that need not be asked again.
+
+    Rows that errored (a timeout, say) are not counted as done, so a resumed
+    run asks them again.
+    """
+    if df.empty:
+        return set()
+    ok = df[df["error"].fillna("") == ""]
+    return {
+        (r.model, int(r.persona_level), int(r.repeat), r.question)
+        for r in ok.itertuples(index=False)
+    }
+
+
+def rows_from_audit(
+    path: str | Path,
+    facts: dict[str, str],
+    questions: Iterable[BenchmarkQuestion] = QUESTIONS,
+    since: str | None = None,
+) -> pd.DataFrame:
+    """Rebuild benchmark rows from the audit log, without asking the model again.
+
+    The audit log is written after every answer, so this recovers a run that
+    was stopped before it saved its results table. It keeps records that have
+    a ``persona_level`` (written since the slider), match a benchmark question
+    and, if ``since`` is given (ISO time, UTC), were written at or after it.
+    Where a question was answered more than once at a level, the latest answer
+    wins. Latency is not in the audit log, so ``seconds`` is left empty.
+    """
+    from marlowe.assistant.agent import Answer, ToolCallRecord, Verification
+
+    by_text = {q.text: q for q in questions}
+    latest: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if "persona_level" not in rec or rec.get("question") not in by_text:
+            continue
+        if since and rec.get("time_utc", "") < since:
+            continue
+        latest[(rec["model"], rec["persona_level"], rec["question"])] = rec
+
+    rows = []
+    for (model, level, text), rec in latest.items():
+        verification = Verification(**rec["grounding"])
+        answer = Answer(
+            question=text,
+            text=rec["answer"],
+            tool_calls=[ToolCallRecord(**c) for c in rec["tool_calls"]],
+            verification=verification,
+            model=model,
+            steps=0,
+            hit_step_limit=rec["answer"].startswith("I stopped after reaching the tool-call"),
+            retries=rec["retries"],
+            first_attempt_passed=rec["first_attempt_passed"],
+            saw_raw_evidence=rec["saw_raw_evidence"],
+        )
+        rows.append(
+            {
+                "model": model,
+                "persona_level": level,
+                "repeat": 0,
+                "seconds": float("nan"),
+                **score_answer(by_text[text], answer, facts),
+                "error": "",
+            }
+        )
+    order = {q.text: i for i, q in enumerate(by_text.values())}
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["_order"] = df["question"].map(order)
+        df = df.sort_values(["model", "persona_level", "_order"]).drop(columns="_order")
+    return df.reset_index(drop=True)
 
 
 def summarise_by_level(df: pd.DataFrame, by: tuple[str, ...] = ("persona_level",)) -> pd.DataFrame:

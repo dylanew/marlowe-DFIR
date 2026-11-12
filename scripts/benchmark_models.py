@@ -8,6 +8,20 @@ Run from the repository root, with Ollama running and the models pulled:
     # the personality slider: same questions at every level, 0 (plain) to 4 (full noir)
     python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4
 
+    # quicker: a subset of questions (numbered from 1; --list-questions shows them)
+    python scripts/benchmark_models.py llama3.1:8b --levels 0 2 4 --questions 1 2 6 8
+
+    # carry on after stopping it (skips answers already in --out)
+    python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4 --resume
+
+    # rebuild the results from the audit log without asking the model again
+    python scripts/benchmark_models.py llama3.1:8b --from-audit
+
+How long it takes: on an M4 MacBook Air (16 GB) with llama3.1:8b, answers take
+20 s to 5 min each, around 2.5 min on average, so all 8 questions at all 5
+levels (40 answers) take 1.5 to 2 hours. The results table is rewritten after
+every answer, so stopping early loses nothing.
+
 For every model, slider level and question it records latency, tool calls,
 whether it looked at raw log lines, whether the grounding check passed (first
 try and after the retry), whether the answer got known facts right, and how
@@ -33,7 +47,13 @@ import pandas as pd
 
 from marlowe.assistant import AnalysisTools, Analyst, OllamaClient
 from marlowe.assistant.prompts import DEFAULT_PERSONA_LEVEL, PERSONA_LEVELS
-from marlowe.evaluation.persona import PersonaBenchmark, summarise_by_level
+from marlowe.evaluation.persona import (
+    QUESTIONS,
+    PersonaBenchmark,
+    done_keys,
+    rows_from_audit,
+    summarise_by_level,
+)
 from marlowe.pipeline import analyse_auth_log
 from marlowe.synthetic import generate_auth_log
 
@@ -77,7 +97,47 @@ def main() -> None:
         "--temperature above 0: at 0 the answers repeat almost exactly",
     )
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--questions",
+        type=int,
+        nargs="+",
+        metavar="N",
+        help="ask only these questions, numbered from 1 (see --list-questions)",
+    )
+    parser.add_argument(
+        "--list-questions", action="store_true", help="print the numbered questions and exit"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600,
+        help="seconds to wait for one model reply before giving up (default 600)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="keep the answers already in --out and ask only the missing or failed ones",
+    )
+    parser.add_argument(
+        "--from-audit",
+        action="store_true",
+        help="don't ask the model: rebuild --out from the answers in --audit",
+    )
+    parser.add_argument(
+        "--since",
+        help="with --from-audit, only answers logged at or after this UTC time, "
+        "e.g. 2026-11-12T21:00",
+    )
     args = parser.parse_args()
+
+    if args.list_questions:
+        for i, q in enumerate(QUESTIONS, 1):
+            print(f"{i}. [{q.kind}] {q.text}")
+        return
+    try:
+        questions = [QUESTIONS[i - 1] for i in args.questions] if args.questions else QUESTIONS
+    except IndexError:
+        parser.error(f"--questions are numbered 1 to {len(QUESTIONS)}")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -91,7 +151,28 @@ def main() -> None:
     logins = tools.successful_logins(top_ip)
     facts = {"top_ip": top_ip, "top_user": logins[0]["user"] if logins else top_ip}
 
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.from_audit:
+        df = rows_from_audit(args.audit, facts, questions, since=args.since)
+        df = df[df["model"].isin(args.models) & df["persona_level"].isin(args.levels)]
+        if df.empty:
+            raise SystemExit(f"No slider answers for those models and levels in {args.audit}")
+        _finish(df, out, args.audit)
+        return
+
+    earlier = pd.DataFrame()
+    if args.resume and out.exists():
+        earlier = pd.read_csv(out)
+        earlier["error"] = earlier["error"].fillna("")
+        earlier = earlier[earlier["error"] == ""]  # failed answers are asked again
+        print(f"Resuming: {len(earlier)} answers already in {out}")
+    rows: list[dict] = earlier.to_dict("records")
+
     def report(row: dict) -> None:
+        # Rewrite the whole table after every answer, so stopping loses nothing.
+        rows.append(row)
+        pd.DataFrame(rows).to_csv(out, index=False)
         if row["error"]:
             print(f"{row['model']:<16} L{row['persona_level']}  ERROR {row['error']}")
             return
@@ -101,9 +182,8 @@ def main() -> None:
             f"correct={row['correct']!s:<5} voice={row['voice_score']:<5}  {row['question'][:50]}"
         )
 
-    frames = []
     for model in args.models:
-        client = OllamaClient(model=model, temperature=args.temperature)
+        client = OllamaClient(model=model, temperature=args.temperature, timeout=args.timeout)
 
         def make_analyst(level: int, client: OllamaClient = client) -> Analyst:
             # A fresh Analyst per question, so earlier answers can't help later ones.
@@ -115,22 +195,27 @@ def main() -> None:
                 persona=level,
             )
 
-        bench = PersonaBenchmark(make_analyst, facts, on_row=report)
-        frames.append(
-            bench.run(args.levels, repeats=args.repeats, model=model, temperature=args.temperature)
+        bench = PersonaBenchmark(
+            make_analyst, facts, questions=questions, on_row=report, done=done_keys(earlier)
         )
+        bench.run(args.levels, repeats=args.repeats, model=model, temperature=args.temperature)
 
-    df = pd.concat(frames, ignore_index=True)
-    df["persona_name"] = df["persona_level"].map(PERSONA_LEVELS)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(args.out, index=False)
+    _finish(pd.DataFrame(rows), out, args.audit)
+
+
+def _finish(df: pd.DataFrame, out: Path, audit: str) -> None:
+    """Save the table and print the summary and the failures."""
+    df["persona_name"] = df["persona_level"].astype(int).map(PERSONA_LEVELS)
+    df.to_csv(out, index=False)
 
     summary = summarise_by_level(df, by=("model", "persona_level"))
     with pd.option_context("display.width", 200, "display.max_columns", 30):
         print("\n" + summary.to_string(index=False))
-    print(f"\nPer-question results: {args.out}")
-    print(f"Full answers and tool calls: {args.audit}")
+    print(f"\nPer-question results: {out}")
+    print(f"Full answers and tool calls: {audit}")
     ok = df[df["error"] == ""]
+    if ok.empty:
+        return
     for _, row in ok[~ok["grounded"].astype(bool)].iterrows():
         print(f"\nFAILED [{row['model']} L{row['persona_level']}] {row['question']}")
         print(f"  tools: {row['tools_used'] or 'none'}")
