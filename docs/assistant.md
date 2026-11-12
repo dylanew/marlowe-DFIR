@@ -78,7 +78,9 @@ The script asks 5 fixed questions per model and records latency, tool calls, gro
 
 | Model | Median s/answer | Mean tool calls | Raw-lines rate | Grounded rate | Notes |
 |---|---|---|---|---|---|
-| *to be filled in from a benchmark run* | | | | | |
+| llama3.1:8b | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; per-answer times 5.0–36.6 s |
+
+**Reading the llama3.1:8b result:** it never fetched raw lines (0 of 5) and averaged barely more than one tool call per question. The two fastest answers (5.0 s and 8.4 s) were the two that failed grounding, which suggests that when it does little tool work, it also fails to cite evidence. With only 5 questions this is indicative, not conclusive. Still, it shows that prompting alone did not make the model check the source.
 
 `Raw-lines rate` is the share of answers where the model fetched the actual log lines with `get_log_lines` instead of relying only on computed summaries. A careful analyst checks the source, so higher is better.
 
