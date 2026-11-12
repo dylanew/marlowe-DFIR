@@ -50,6 +50,9 @@ def main() -> None:
     parser.add_argument(
         "--retries", type=int, default=1, help="grounding retries per answer (0 = off)"
     )
+    parser.add_argument(
+        "--noir", action="store_true", help="benchmark with the noir persona switched on"
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -64,7 +67,11 @@ def main() -> None:
         for question in QUESTIONS:
             # A fresh Analyst per question, so earlier answers can't help later ones.
             analyst = Analyst(
-                client, AnalysisTools(result), max_retries=args.retries, audit_path=args.audit
+                client,
+                AnalysisTools(result),
+                max_retries=args.retries,
+                audit_path=args.audit,
+                persona=args.noir,
             )
             start = time.perf_counter()
             try:
@@ -75,6 +82,7 @@ def main() -> None:
             rows.append(
                 {
                     "model": model,
+                    "persona": args.noir,
                     "question": question,
                     "seconds": round(time.perf_counter() - start, 1),
                     "tool_calls": len(answer.tool_calls),

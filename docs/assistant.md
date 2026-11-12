@@ -60,11 +60,43 @@ Each answer is followed by the tools the model called and the result of the grou
 | Runaway tool loops | Capped at 8 steps per question. |
 | The model doesn't look at the source evidence | `get_finding` and `ip_activity` include a few representative raw lines (`sample_evidence`): the first lines, any successful logins and the last line. The model sees the source without having to remember to ask for it. |
 | The model guesses an identifier, the lookup fails, and it concludes "nothing happened" | Lookup errors are **recoverable**: an unknown IP returns the flagged IPs, an unknown user returns the known users, and invented parameters return the valid ones, each with a hint naming the right tool. An answer built only on failed tool calls **fails** the grounding check, and the retry message says that a failed call is not evidence of absence. |
+| A sweeping citation such as `[lines 1-539]` passes because every line in it was seen somewhere (seen in the web app: "539 cited lines all verified") | A citation wider than 40 lines must sit inside one block a tool returned as a unit, such as a finding's own window. Otherwise it fails as "too wide", and the retry asks for the specific lines behind each claim. |
+| The investigator asks about something that isn't there ("What did 10.9.9.9 do?"), and the correct answer, "it isn't in the evidence", has nothing to cite | A lookup that finds nothing returns `not_found`. If the investigator's own question named that value and the answer says plainly that it is absent, the check passes without citations. A value the *model* guessed never counts, so the original failure (guess an IP, find nothing, conclude no attack) still fails. |
+| Invented times ("between 16:50 and 17:40" when the window starts at 16:50 and activity ends at 17:00) | Every ISO timestamp in an answer, to the minute, must have appeared in a tool result. |
+| The answer misses that an attack succeeded (seen twice with llama3.1:8b: "the attackers haven't been very successful" about an IP that got root) | Every finding carries the IP's successful logins across the whole log and, when there are any, a plain-sentence `alert`. A deterministic **completeness check** then fails any answer that names a flagged IP which logged in without saying so, and the retry states exactly what was left out. The Findings tab shows the same fact in an "IP ever logged in as" column. |
 | An ungrounded answer reaches the investigator | **Verify, then retry:** if the grounding check fails, the answer goes back to the model once with the specific problems. The note is labelled as coming from the automated checker, not the investigator. Both attempts are kept in the audit log, and the CLI says when a retry happened. |
 | Bugs disguised as "tool errors" | Only expected problems (`ToolError`, invalid arguments) go back to the model. Anything else raises, so it gets fixed. |
 | Accountability | Every question, the tool calls and their arguments, the answer and the grounding result go to an append-only audit log (`data/processed/assistant_audit.jsonl`) with the model name and prompt version. |
 
+### Three outcomes, not two
+
+Marlowe also answers general questions ("what is a password spray?", "how should I harden sshd?"), which have nothing to cite. So every answer gets one of three statuses:
+
+| Status | When | Shown as |
+|---|---|---|
+| **verified** | Every cited line, IP and hash checks out, or the answer reports that something the investigator asked about isn't in the evidence, as a tool confirmed | green |
+| **general** | The answer ends with "General guidance, not drawn from this evidence." **and** names nothing from the evidence: no citations, IPs, hashes or finding IDs | neutral |
+| **failed** | Anything else, such as an uncited claim like "It was a brute force attack." | red; retried once |
+
+The label is required on purpose. Without it, an evidence question answered from thin air would look exactly like a general answer. With it, an unlabelled, uncited claim still fails and goes back to the model. A model can still mislabel an answer, so the neutral badge says plainly that the answer was not checked against the evidence.
+
 **What the grounding check does not do:** it confirms that cited evidence *exists and was seen*, not that the model *interpreted* it correctly. An answer can cite real lines and still draw a wrong conclusion. That is why the investigator stays in the loop.
+
+## The noir persona
+
+Marlowe is named after Raymond Chandler's detective, so it can optionally talk like one. `--noir` on `marlowe chat`, or the **Noir voice** switch in the web app, appends a short persona prompt (`PERSONA_PROMPT` in `prompts.py`) after the rules.
+
+Design choices:
+
+- **Tone only.** The persona may colour the short answer and the interpretation. The evidence section stays plain: citations, IPs, usernames, timestamps and counts are written exactly as the tools returned them.
+- **Rules first.** The persona comes after the rules and says that it never overrides them. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
+- **Original voice.** The prompt asks for the style, not quotations from the novels.
+- **Measured, not assumed.** The persona has its own version (`PERSONA_VERSION`), recorded in the audit log. To check it costs nothing in grounding, run the benchmark twice and compare:
+
+```bash
+python scripts/benchmark_models.py llama3.1:8b --out data/processed/bench_plain.csv
+python scripts/benchmark_models.py llama3.1:8b --noir --out data/processed/bench_noir.csv
+```
 
 ## Choosing a model
 

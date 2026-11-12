@@ -3,6 +3,7 @@
 marlowe generate --out data/sample        # write a synthetic auth.log + labels
 marlowe analyse data/sample/auth.log --year 2026 --labels data/sample/auth_labels.csv
 marlowe chat data/sample/auth.log --year 2026      # ask Marlowe (needs Ollama running)
+marlowe web                                        # the web app (needs the `web` extra)
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     result = analyse_auth_log(
         args.log, manifest_path=args.manifest, year=args.year, tz=args.tz, window=args.window
     )
-    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit)
+    analyst = Analyst(client, AnalysisTools(result), audit_path=args.audit, persona=args.noir)
     print(
         f"Evidence {result.evidence.evidence_id} loaded. Model: {args.model}. "
         f"Every answer is logged to {args.audit}."
@@ -126,6 +127,20 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         if not question:
             break
         answer(question)
+
+
+def _cmd_web(args: argparse.Namespace) -> None:
+    import importlib.util
+    import subprocess
+    import sys
+
+    if importlib.util.find_spec("streamlit") is None:
+        raise SystemExit('The web app needs Streamlit. Run: pip install -e ".[web]"')
+    app = Path(__file__).parent / "webapp" / "app.py"
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port)]
+    # Bind to this machine only by default: the app shows raw evidence.
+    cmd += ["--server.address", args.address, "--browser.gatherUsageStats", "false"]
+    raise SystemExit(subprocess.call(cmd))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -161,7 +176,15 @@ def main(argv: list[str] | None = None) -> None:
     chat.add_argument("--manifest", default="data/processed/evidence.manifest.jsonl")
     chat.add_argument("--audit", default="data/processed/assistant_audit.jsonl")
     chat.add_argument("--window", default="10min")
+    chat.add_argument(
+        "--noir", action="store_true", help="answer in Marlowe's noir voice (tone only)"
+    )
     chat.set_defaults(func=_cmd_chat)
+
+    web = sub.add_parser("web", help="Open the Marlowe web app in your browser")
+    web.add_argument("--port", type=int, default=8501)
+    web.add_argument("--address", default="localhost")
+    web.set_defaults(func=_cmd_web)
 
     args = parser.parse_args(argv)
     args.func(args)

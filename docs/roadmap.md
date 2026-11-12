@@ -44,6 +44,14 @@ Follow-ups identified by the error analysis:
 - Prompt v2: discover identifiers, never guess them
 - Re-ran the benchmark: both former failures now recover via retry
 
+## Step 3d: Web app (done)
+
+A Streamlit app (`marlowe web`) over the same pipeline and assistant: overview with evaluation metrics, findings table with drill-down to raw lines, timeline charts, and an Ask Marlowe chat that shows the tools used and the grounding check on every answer. Streamlit was chosen over Open WebUI so that findings, charts and chat sit in one interface and Marlowe's safeguards (tool loop, grounding check, audit log) stay in our code.
+
+## Step 3e: Philip Marlowe persona and noir theme (done; benchmark pending)
+
+An optional noir voice for the assistant, in tone only, with the evidence section kept plain. Versioned separately (`PERSONA_VERSION`, recorded in the audit log) so it can be benchmarked on and off and the personality shown not to cost accuracy. The web app also gets a noir theme and CSS smoke effects.
+
 ## Step 4: Portfolio presentation
 
 - Methodology write-up, architecture diagram, screenshots, short demo

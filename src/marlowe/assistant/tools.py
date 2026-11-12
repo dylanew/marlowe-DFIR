@@ -42,6 +42,10 @@ class ToolError(Exception):
     Anything else is a bug in our code and is allowed to raise, so it can't
     hide behind an innocent-looking "error" message to the model.
 
+    ``not_found`` (a detail) marks a confirmed absence: the IP, user or
+    finding really isn't in the evidence. That is a result, not a failure, and
+    the grounding check accepts an answer that reports it plainly.
+
     ``details`` makes the error *recoverable*. Benchmarking showed that a small
     model which guesses an IP (e.g. 192.168.1.100) and gets a bare "not found"
     will conclude there is no attack. So errors return the real candidates and
@@ -99,6 +103,14 @@ class AnalysisTools:
     def __init__(self, result: AnalysisResult):
         self.result = result
         self.events = result.events.set_index("line_no", drop=False)
+        ok = self.events[self.events["event_type"] == "auth_success"]
+        self._logins_by_ip: dict[str, list[dict[str, Any]]] = {
+            ip: [
+                {"user": r["user"], "time_utc": _iso(r["timestamp_utc"]), "line_no": int(n)}
+                for n, r in rows.iterrows()
+            ]
+            for ip, rows in ok.groupby("src_ip")
+        }
         # Stable finding IDs: F1 is the most anomalous flagged window.
         w = result.windows
         findings = w[w["rule_flag"] | w["if_flag"]]
@@ -258,6 +270,14 @@ class AnalysisTools:
                 "isolation_forest": "unsupervised anomaly score; higher = more unusual",
             },
             "n_findings": int(len(self.findings)),
+            # The overview alone can't answer "was there an attack?": it has
+            # counts, not who or which lines. A real llama3.1:8b answer stopped
+            # here and invented a citation, so the top leads come with it.
+            "top_findings": [
+                self._finding_summary(row) for _, row in self.findings.head(3).iterrows()
+            ],
+            "next": "Call get_finding on the relevant finding(s) for details and raw "
+            "lines before answering any question about attacks or suspicious activity.",
         }
 
     def _finding_summary(self, row: pd.Series) -> dict[str, Any]:
@@ -276,7 +296,29 @@ class AnalysisTools:
             "isolation_forest_reasons": row["if_reasons"] or None,
             "evidence_id": row["evidence_id"],
             "line_range": _line_range(row["line_nos"]),
+            # Across the whole log, not just this window: a brute force whose
+            # success lands in the next window is the most important fact.
+            # llama3.1:8b skipped a plain list of usernames twice, so a flagged
+            # IP that got in also gets a sentence it can't easily miss.
+            "src_ip_successful_logins": self.successful_logins(row["src_ip"])[:5],
+            **({"alert": self._alert(row["src_ip"])} if self._alert(row["src_ip"]) else {}),
         }
+
+    def successful_logins(self, ip: str) -> list[dict[str, Any]]:
+        """Every successful login from ``ip`` anywhere in the log."""
+        return self._logins_by_ip.get(ip, [])
+
+    def _alert(self, ip: str) -> str | None:
+        logins = self.successful_logins(ip)
+        if not logins:
+            return None
+        first = logins[0]
+        users = sorted({x["user"] for x in logins})
+        return (
+            f"{ip} LOGGED IN SUCCESSFULLY as {', '.join(users)} (first at {first['time_utc']}, "
+            f"line {first['line_no']}). If this IP was attacking, treat it as a likely "
+            "compromise and say so first."
+        )
 
     def list_findings(self, limit: int = 10, detector: str = "any") -> dict[str, Any]:
         f = self.findings
@@ -296,7 +338,10 @@ class AnalysisTools:
     def get_finding(self, finding_id: str) -> dict[str, Any]:
         match = self.findings[self.findings["finding_id"] == str(finding_id).strip().upper()]
         if match.empty:
-            raise ToolError(f"no finding '{finding_id}'; ids run F1..F{len(self.findings)}")
+            raise ToolError(
+                f"no finding '{finding_id}'; ids run F1..F{len(self.findings)}",
+                not_found=finding_id,
+            )
         row = match.iloc[0]
         out = self._finding_summary(row)
         out["features"] = {c: round(float(row[c]), 3) for c in self.result.detector.features}
@@ -347,6 +392,7 @@ class AnalysisTools:
         if ev.empty:
             raise ToolError(
                 f"IP {src_ip} does not appear in the log. Do not guess IP addresses.",
+                not_found=src_ip,
                 flagged_ips=list(dict.fromkeys(self.findings["src_ip"]))[:15],
                 hint="Call list_findings to see which IPs were flagged, then retry "
                 "ip_activity with one of those.",
@@ -377,6 +423,7 @@ class AnalysisTools:
         if ev.empty:
             raise ToolError(
                 f"user '{user}' has no authentication events. Do not guess usernames.",
+                not_found=user,
                 known_users=sorted(
                     self.events.loc[self.events["event_type"] == "auth_success", "user"]
                     .dropna()

@@ -38,7 +38,9 @@ def test_tool_loop_and_grounded_answer(analysis, tmp_path):
         [
             tool_call("get_overview"),
             tool_call("get_log_lines", start_line=first, end_line=first + 2),
-            final(f"{ip} attempted many logins [lines {first}-{first + 2}]."),
+            final(
+                f"{ip} attempted many logins [lines {first}-{first + 2}], then logged in as root."
+            ),
         ]
     )
     audit = tmp_path / "audit.jsonl"
@@ -197,7 +199,9 @@ def test_citation_styles_real_models_use(analysis):
     # From a real llama3.1:8b answer, which used parentheses, not square brackets.
     tools = AnalysisTools(analysis)
     text = "130 failed passwords from one IP in a window (lines 1309-1548). See lines 5 and 7."
-    v = verify_answer(text, tools, set(range(1, 2000)))
+    # 1309-1548 is wider than MAX_CITATION_SPAN, so it only passes when a tool
+    # returned it as one block (here, as if it were a finding's window).
+    v = verify_answer(text, tools, set(range(1, 2000)), referenced_ranges={(1300, 1600)})
     assert v.has_citations
     assert v.cited_lines[:3] == [5, 7, 1309]
     assert v.cited_lines[-1] == 1548
@@ -221,7 +225,7 @@ def test_replay_guessed_ip_failure_recovers(analysis):
             final("1. Insufficient evidence. No source IP appears to be a brute force."),
             tool_call("list_findings", limit=5),
             tool_call("ip_activity", src_ip=ip),
-            final(f"{ip} is the brute-force source [line {first}]."),
+            final(f"{ip} is the brute-force source [line {first}] and logged in as root."),
         ]
     )
     answer = Analyst(client, tools).ask("Which source IP looks most like a brute-force attack?")
@@ -265,3 +269,222 @@ def test_follow_up_can_use_earlier_tool_results(analysis):
     analyst.ask("what happened first?")
     second = analyst.ask("say that again")
     assert second.verification.passed  # no new tool call needed for a follow-up
+
+
+def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
+    from marlowe.assistant.prompts import SYSTEM_PROMPT, system_prompt
+
+    assert system_prompt() == SYSTEM_PROMPT
+    noir = system_prompt(persona=True)
+    assert noir.startswith(SYSTEM_PROMPT)  # rules first, voice after
+    assert "never overrides the rules" in noir
+
+    audit = tmp_path / "audit.jsonl"
+    plain = Analyst(FakeClient([final("x")] * 2), AnalysisTools(analysis), audit_path=audit)
+    voiced = Analyst(
+        FakeClient([final("x")] * 2), AnalysisTools(analysis), audit_path=audit, persona=True
+    )
+    assert plain.history[0]["content"] == SYSTEM_PROMPT
+    assert voiced.history[0]["content"] == noir
+    plain.ask("q")
+    voiced.ask("q")
+    records = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert [r["persona_version"] for r in records] == [None, "1"]
+
+
+def test_wide_citation_must_match_a_block_a_tool_returned(analysis):
+    """Seen in the web app: "539 cited lines all verified" from one sweeping range."""
+    tools = AnalysisTools(analysis)
+    seen = set(range(1, 2000))
+    v = verify_answer("It's all in [lines 10-548].", tools, seen, referenced_ranges={(10, 20)})
+    assert v.too_wide_citations == ["10-548"]
+    assert not v.passed
+    assert "too wide" in v.summary()
+    # Narrow citations are fine anywhere among the lines the tools returned.
+    assert verify_answer("See [lines 10-40] and [line 548].", tools, seen).passed
+
+
+def test_wide_citation_of_a_whole_finding_passes(analysis):
+    tools = AnalysisTools(analysis)
+    f = tools.get_finding("F1")
+    lo, hi = (int(x) for x in f["line_range"].split("-"))
+    assert hi - lo + 1 > 40  # the brute force: a wide window, cited as a whole
+    client = FakeClient(
+        [
+            tool_call("get_finding", finding_id=f["finding_id"]),
+            final(f"{f['src_ip']} hammered the server [lines {lo}-{hi}] and got in as root."),
+        ]
+    )
+    answer = Analyst(client, tools).ask(f"What is {f['finding_id']}?")
+    assert answer.verification.passed, answer.verification.summary()
+
+
+def test_asked_about_absent_ip_can_answer_not_in_evidence(analysis):
+    """Seen in the web app: "What did 10.9.9.9 do?" got a correct answer and a red badge."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="10.9.9.9"),
+            final("10.9.9.9 does not appear in the evidence. There is nothing to report."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("What did 10.9.9.9 do?")
+    v = answer.verification
+    assert v.passed, v.summary()
+    assert v.reported_absent == ["10.9.9.9"]
+    assert answer.retries == 0
+    assert "not in the evidence" in v.summary()
+
+
+def test_absence_of_a_guessed_ip_is_not_an_answer(analysis):
+    """The original failure must still fail: the model guessed an IP the
+    investigator never mentioned, and "it isn't there" proves nothing."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="192.168.1.100"),
+            final("192.168.1.100 does not appear in the evidence, so no brute force."),
+            final("Still nothing for 192.168.1.100, it is not in the log."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("Was there a brute-force attack?")
+    v = answer.verification
+    assert not v.passed
+    assert v.no_successful_tool_result
+    assert v.unknown_ips == ["192.168.1.100"]
+
+
+def test_absence_wording_is_required(analysis):
+    """Asked about a missing IP, but the answer invents activity anyway."""
+    client = FakeClient(
+        [
+            tool_call("ip_activity", src_ip="10.9.9.9"),
+            final("10.9.9.9 brute-forced root and got in."),
+            final("10.9.9.9 brute-forced root and got in."),
+        ]
+    )
+    answer = Analyst(client, AnalysisTools(analysis)).ask("What did 10.9.9.9 do?")
+    assert not answer.verification.passed
+
+
+def test_general_question_gets_a_neutral_status_without_tools(analysis, tmp_path):
+    text = (
+        "A password spray tries one or two common passwords against many accounts, "
+        "staying under lockout thresholds.\n\nGeneral guidance, not drawn from this evidence."
+    )
+    audit = tmp_path / "audit.jsonl"
+    answer = Analyst(FakeClient([final(text)]), AnalysisTools(analysis), audit_path=audit).ask(
+        "What is a password spray?"
+    )
+    v = answer.verification
+    assert v.status == "general" and not v.passed
+    assert answer.retries == 0  # nothing to fix, so no retry
+    assert "General answer" in v.summary()
+    assert json.loads(audit.read_text())["grounding_status"] == "general"
+
+
+def test_general_label_does_not_excuse_evidence_claims(analysis):
+    """Naming an IP or finding makes it an evidence answer, label or not."""
+    tools = AnalysisTools(analysis)
+    ip = tools.get_finding("F1")["src_ip"]
+    v = verify_answer(f"{ip} is the attacker. General guidance.", tools, set())
+    assert v.status == "failed"
+    v = verify_answer("F1 is bad. General guidance.", tools, set())
+    assert v.status == "failed"
+
+
+def test_unlabelled_uncited_claim_still_fails(analysis):
+    v = verify_answer("It was a brute force attack.", AnalysisTools(analysis), set())
+    assert v.status == "failed"
+
+
+def test_prompt_allows_general_questions_but_keeps_evidence_rules():
+    from marlowe.assistant.prompts import SYSTEM_PROMPT
+
+    assert "General guidance, not drawn from this evidence." in SYSTEM_PROMPT
+    assert "Never guess IP addresses" in SYSTEM_PROMPT
+    assert "conversational overview" in SYSTEM_PROMPT
+
+
+def test_overview_points_at_the_top_findings(analysis):
+    overview = AnalysisTools(analysis).get_overview()
+    top = overview["top_findings"]
+    assert [f["finding_id"] for f in top] == ["F1", "F2", "F3"]
+    assert all("line_range" in f for f in top)
+    assert "get_finding" in overview["next"]
+
+
+def test_replay_overview_only_answer_with_invented_line(analysis):
+    """Replays a real llama3.1:8b answer to "was there a brute force attack?":
+    it called only get_overview, quoted the total failures and cited a line
+    no tool returned. It must fail, and the retry must send it to get_finding."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    client = FakeClient(
+        [
+            tool_call("get_overview"),
+            final("There were 655 authentication failures in the log. [line 1234]"),
+            tool_call("get_finding", finding_id="F1"),
+            final(
+                f"{f1['src_ip']} made {f1['n_failed']} failed attempts "
+                f"[line {f1['line_nos'][0]}], then logged in as root."
+            ),
+        ]
+    )
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    assert not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert "get_finding" in retry
+    assert answer.verification.passed
+
+
+def test_finding_says_whether_the_ip_ever_got_in(analysis):
+    """The brute force's root login falls just after F1's window; a real answer
+    missed it. Every finding now carries the IP's successful logins."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_overview()["top_findings"][0]
+    assert f1["n_success"] == 0
+    assert [x["user"] for x in f1["src_ip_successful_logins"]] == ["root"]
+    assert "LOGGED IN SUCCESSFULLY as root" in f1["alert"]
+
+
+def test_replay_invented_end_time(analysis):
+    """Real answer: "between 2026-10-14T16:50:00+00:00 and 2026-10-14T17:40:00+00:00".
+    The window starts at 16:50; 17:40 was never returned by any tool."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    lo, hi = f1["line_range"].split("-")
+    start = f1["window_start_utc"]
+    claim = f"{f1['src_ip']} failed {f1['n_failed']} times, then logged in as root,"
+    bad = f"{claim} between {start} and 2026-10-14T17:40 [lines {lo}-{hi}]."
+    good = f"{claim} from {start} [lines {lo}-{hi}]."
+    client = FakeClient([tool_call("get_finding", finding_id="F1"), final(bad), final(good)])
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    assert not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert "2026-10-14T17:40" in retry
+    assert answer.verification.passed
+
+
+def test_replay_missed_root_login(analysis):
+    """Real answer (twice): F1 and F4 listed, "the attackers haven't been very
+    successful", no mention that 203.0.113.62 logged in as root. It must fail,
+    and the retry must say exactly what was left out."""
+    tools = AnalysisTools(analysis)
+    f1 = tools.get_finding("F1")
+    ip, rng = f1["src_ip"], f1["line_range"]
+    root = tools.successful_logins(ip)[0]["line_no"]
+    client = FakeClient(
+        [
+            tool_call("get_finding", finding_id="F1"),
+            final(f"Persistent but unsuccessful brute force from {ip} [lines {rng}]."),
+            final(
+                f"{ip} brute-forced the server [lines {rng}] and then logged in as root "
+                f"[line {root}]. Treat it as compromised."
+            ),
+        ]
+    )
+    answer = Analyst(client, tools).ask("was there a brute force attack?")
+    first = answer.first_attempt_text
+    assert "unsuccessful" in first and not answer.first_attempt_passed
+    retry = [m for m in client.requests[2]["messages"] if m["role"] == "user"][-1]["content"]
+    assert f"{ip} logged in as root [line {root}]" in retry
+    assert answer.verification.passed, answer.verification.summary()

@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6"]
 notebooks = ["jupyterlab>=4", "matplotlib>=3.8"]
+web = ["streamlit>=1.50", "altair>=5"]
 
 [project.scripts]
 marlowe = "marlowe.cli:main"
