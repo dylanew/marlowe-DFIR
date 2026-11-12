@@ -60,11 +60,67 @@ def test_tool_loop_and_grounded_answer(analysis, tmp_path):
     assert record["evidence_id"] == analysis.evidence.evidence_id
 
 
-def test_invented_line_numbers_fail_grounding(analysis):
-    client = FakeClient([tool_call("get_overview"), final("Root was compromised [line 3].")])
+def test_invented_line_numbers_fail_grounding_even_after_retry(analysis):
+    client = FakeClient(
+        [
+            tool_call("get_overview"),
+            final("Root was compromised [line 3]."),
+            final("Root was definitely compromised [line 3]."),
+        ]
+    )
     answer = Analyst(client, AnalysisTools(analysis)).ask("q")
+    assert answer.retries == 1
+    assert not answer.first_attempt_passed
     assert not answer.verification.passed
     assert answer.verification.unverified_lines == [3]
+    assert answer.first_attempt_text == "Root was compromised [line 3]."
+
+
+def test_retry_fixes_ungrounded_answer(analysis, tmp_path):
+    client = FakeClient(
+        [
+            final("It was a brute force attack."),
+            tool_call("get_log_lines", start_line=10, end_line=12),
+            final("Failed logins are shown [lines 10-12]."),
+        ]
+    )
+    audit = tmp_path / "audit.jsonl"
+    answer = Analyst(client, AnalysisTools(analysis), audit_path=audit).ask("q")
+    assert not answer.first_attempt_passed
+    assert answer.retries == 1
+    assert answer.verification.passed
+    assert answer.text == "Failed logins are shown [lines 10-12]."
+    assert answer.saw_raw_evidence
+
+    # The corrective message is clearly labelled and names the problem.
+    retry_msg = [m for m in client.requests[1]["messages"] if m["role"] == "user"][-1]
+    assert retry_msg["content"].startswith("[Automated evidence check, not the investigator]")
+    assert "no line citations" in retry_msg["content"]
+
+    record = json.loads(audit.read_text().splitlines()[0])
+    assert record["first_attempt_passed"] is False
+    assert record["first_attempt_answer"] == "It was a brute force attack."
+    assert record["grounding_passed"] is True
+
+
+def test_no_retry_when_first_answer_passes(analysis):
+    client = FakeClient([tool_call("get_log_lines", start_line=1), final("ok [line 1]")])
+    answer = Analyst(client, AnalysisTools(analysis)).ask("q")
+    assert answer.retries == 0 and answer.first_attempt_passed
+    assert answer.first_attempt_text == ""
+    assert len(client.requests) == 2
+
+
+def test_sample_evidence_in_get_finding_counts_as_raw_evidence(analysis):
+    tools = AnalysisTools(analysis)
+    sample = tools.get_finding("F1")["sample_evidence"]["untrusted_log_lines"]
+    cite = sample[0]["line_no"]
+    client = FakeClient(
+        [tool_call("get_finding", finding_id="F1"), final(f"Starts with [line {cite}].")]
+    )
+    answer = Analyst(client, tools).ask("q")
+    assert answer.saw_raw_evidence
+    assert answer.verification.passed
 
 
 def test_invented_ip_and_hash_fail_grounding(analysis):
@@ -101,7 +157,7 @@ def test_string_arguments_and_unknown_tools_handled(analysis):
             final("Done."),
         ]
     )
-    answer = Analyst(client, AnalysisTools(analysis)).ask("q")
+    answer = Analyst(client, AnalysisTools(analysis), max_retries=0).ask("q")
     tool_msgs = [m for m in client.requests[-1]["messages"] if m["role"] == "tool"]
     assert json.loads(tool_msgs[0]["content"])["finding_id"] == "F1"
     assert "unknown tool" in json.loads(tool_msgs[1]["content"])["error"]
@@ -117,7 +173,7 @@ def test_step_limit_stops_runaway_loops(analysis):
 
 def test_conversation_history_carries_over(analysis):
     client = FakeClient([final("First."), final("Second.")])
-    analyst = Analyst(client, AnalysisTools(analysis))
+    analyst = Analyst(client, AnalysisTools(analysis), max_retries=0)
     analyst.ask("one")
     analyst.ask("two")
     roles = [m["role"] for m in client.requests[-1]["messages"]]

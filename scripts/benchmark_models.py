@@ -42,6 +42,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("models", nargs="+")
     parser.add_argument("--out", default="data/processed/model_benchmark.csv")
+    parser.add_argument(
+        "--retries", type=int, default=1, help="grounding retries per answer (0 = off)"
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +58,7 @@ def main() -> None:
         client = OllamaClient(model=model)
         for question in QUESTIONS:
             # A fresh Analyst per question, so earlier answers can't help later ones.
-            analyst = Analyst(client, AnalysisTools(result))
+            analyst = Analyst(client, AnalysisTools(result), max_retries=args.retries)
             start = time.perf_counter()
             try:
                 answer = analyst.ask(question)
@@ -71,6 +74,10 @@ def main() -> None:
                     "distinct_tools": len({c.name for c in answer.tool_calls}),
                     # Did it look at the raw evidence, or only at computed summaries?
                     "fetched_raw_lines": any(c.name == "get_log_lines" for c in answer.tool_calls),
+                    # Saw raw log text from any tool (incl. sample_evidence in get_finding).
+                    "saw_raw_evidence": answer.saw_raw_evidence,
+                    "first_attempt_grounded": answer.first_attempt_passed,
+                    "retries": answer.retries,
                     "grounded": answer.verification.passed,
                     "cited_lines": len(answer.verification.cited_lines),
                     "hit_step_limit": answer.hit_step_limit,
@@ -78,7 +85,10 @@ def main() -> None:
                     "error": "",
                 }
             )
-            print(f"{model:<20} {rows[-1]['seconds']:>6}s  grounded={answer.verification.passed}")
+            print(
+                f"{model:<20} {rows[-1]['seconds']:>6}s  "
+                f"first_try={answer.first_attempt_passed}  grounded={answer.verification.passed}"
+            )
 
     df = pd.DataFrame(rows)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +99,8 @@ def main() -> None:
         median_seconds=("seconds", "median"),
         mean_tool_calls=("tool_calls", "mean"),
         raw_lines_rate=("fetched_raw_lines", "mean"),
+        raw_evidence_rate=("saw_raw_evidence", "mean"),
+        first_try_grounded=("first_attempt_grounded", "mean"),
         grounded_rate=("grounded", "mean"),
         step_limit_rate=("hit_step_limit", "mean"),
     )

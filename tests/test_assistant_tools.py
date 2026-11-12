@@ -97,3 +97,16 @@ def test_bad_calls_return_errors_not_exceptions(tools):
     assert "error" in json.loads(tools.call("get_finding", "{not json"))
     assert "error" in json.loads(tools.call("get_overview", {"surprise": 1}))
     assert "error" in json.loads(tools.call("get_log_lines", {"start_line": "ten"}))
+
+
+def test_sample_evidence_is_bounded_and_includes_successes(tools, analysis):
+    # The brute force that ended in a root login: its success line must be sampled.
+    finding = next(f for f in tools.list_findings(limit=25)["findings"] if f["n_success"] > 0)
+    out = call(tools, "get_finding", finding_id=finding["finding_id"])
+    lines = out["sample_evidence"]["untrusted_log_lines"]
+    assert 1 <= len(lines) <= 7
+    assert any("Accepted" in line["text"] for line in lines)
+    assert [line["line_no"] for line in lines] == sorted(line["line_no"] for line in lines)
+
+    ip = call(tools, "ip_activity", src_ip=finding["src_ip"])
+    assert ip["sample_evidence"]["untrusted_log_lines"]

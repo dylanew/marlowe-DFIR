@@ -57,6 +57,8 @@ Each answer is followed by the tools the model called and the result of the grou
 | Context overflow on a 16 GB machine | Every tool output is bounded (≤ 25 findings, ≤ 40 lines, ≤ 30 usernames). |
 | Ground truth leaking into the answer | On synthetic data the labels exist, but no tool exposes them, and a test checks this. Marlowe reasons from the same information a real analyst would have. |
 | Runaway tool loops | Capped at 8 steps per question. |
+| The model doesn't look at the source evidence | `get_finding` and `ip_activity` include a few representative raw lines (`sample_evidence`): the first lines, any successful logins and the last line. The model sees the source without having to remember to ask for it. |
+| An ungrounded answer reaches the investigator | **Verify, then retry:** if the grounding check fails, the answer goes back to the model once with the specific problems. The note is labelled as coming from the automated checker, not the investigator. Both attempts are kept in the audit log, and the CLI says when a retry happened. |
 | Bugs disguised as "tool errors" | Only expected problems (`ToolError`, invalid arguments) go back to the model. Anything else raises, so it gets fixed. |
 | Accountability | Every question, the tool calls and their arguments, the answer and the grounding result go to an append-only audit log (`data/processed/assistant_audit.jsonl`) with the model name and prompt version. |
 
@@ -76,13 +78,16 @@ python scripts/benchmark_models.py llama3.1:8b qwen2.5:7b
 
 The script asks 5 fixed questions per model and records latency, tool calls, grounding pass rate and step-limit hits. The results table belongs in this document once it has been run.
 
-| Model | Median s/answer | Mean tool calls | Raw-lines rate | Grounded rate | Notes |
-|---|---|---|---|---|---|
-| llama3.1:8b | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; per-answer times 5.0–36.6 s |
+| Model | Version | Median s/answer | Mean tool calls | Saw raw evidence | First-try grounded | Final grounded | Notes |
+|---|---|---|---|---|---|---|---|
+| llama3.1:8b | step 3 (prompt only) | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; 5.0–36.6 s per answer |
+| llama3.1:8b | step 3b (sample evidence + retry) | *to run* | | | | | |
+
+Use `--retries 0` to measure the effect of sample evidence alone, without retries.
 
 **Reading the llama3.1:8b result:** it never fetched raw lines (0 of 5) and averaged barely more than one tool call per question. The two fastest answers (5.0 s and 8.4 s) were the two that failed grounding, which suggests that when it does little tool work, it also fails to cite evidence. With only 5 questions this is indicative, not conclusive. Still, it shows that prompting alone did not make the model check the source.
 
-`Raw-lines rate` is the share of answers where the model fetched the actual log lines with `get_log_lines` instead of relying only on computed summaries. A careful analyst checks the source, so higher is better.
+`Saw raw evidence` is the share of answers where the model received actual log text from any tool, whether through `get_log_lines` or the `sample_evidence` that `get_finding` and `ip_activity` now include. (The step 3 run measured only `get_log_lines`, which was the only source of raw text then.) A careful analyst checks the source, so higher is better. `First-try grounded` is the grounding rate before any retry, and `Final grounded` is the rate after it.
 
 ### First real run (llama3.1:8b, M4 MacBook Air)
 
@@ -90,6 +95,15 @@ Asked "What is the most serious finding?", the model called `get_finding("F1")` 
 
 - It cited `(lines 1309-1548)` rather than the requested `[lines ...]`, so the first version of the grounding check wrongly reported "no citations". The checker now verifies every "line N" mention, whatever the brackets.
 - It summarised from computed features **without fetching any raw lines**, despite the prompt asking it to check the source. The benchmark's raw-lines rate measures this across questions and models.
+
+### Step 3b: safeguards in code, not just the prompt
+
+The step 3 benchmark showed that the prompt alone doesn't make an 8B model careful: it never fetched raw lines, and 2 of 5 answers failed grounding. Rather than rewording the prompt again, step 3b moves the safeguards into code:
+
+1. **Evidence comes with the finding.** `get_finding` and `ip_activity` now include up to 7 representative raw lines, so the model sees the source even if it never calls `get_log_lines`.
+2. **Verify, then retry.** A failed grounding check sends the answer back once, with the specific problems (for example "no line citations", or "IPs not in the evidence: [...]"). The investigator sees the final answer and whether a retry happened. The audit log keeps both attempts.
+
+The design principle is that **reliability comes from the system, not from the model's good behaviour**. That matters most with small local models.
 
 ## Testing without a GPU
 

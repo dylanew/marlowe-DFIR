@@ -29,7 +29,13 @@ Follow-ups identified by the error analysis:
 - Python layer where the LLM can only call predefined, read-only analysis functions
 - Explanations of flagged events that cite evidence IDs and line numbers
 - Deterministic grounding check and an append-only audit log
-- To do: run `scripts/benchmark_models.py` on the Mac and record the results in `docs/assistant.md`
+- Benchmarked llama3.1:8b: correct answers but it rarely checks the raw evidence (see `docs/assistant.md`)
+
+## Step 3b: Safeguards in code (current)
+
+- Sample raw evidence included in `get_finding` and `ip_activity`
+- Verify-then-retry when the grounding check fails
+- Re-run the benchmark to measure the effect against the step 3 baseline
 
 ## Step 4: Portfolio presentation
 

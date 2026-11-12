@@ -33,6 +33,7 @@ from marlowe.pipeline import AnalysisResult
 
 MAX_LINES = 40
 MAX_FINDINGS = 25
+SAMPLE_LINES = 7
 
 
 class ToolError(Exception):
@@ -260,7 +261,28 @@ class AnalysisTools:
         out = self._finding_summary(row)
         out["features"] = {c: round(float(row[c]), 3) for c in self.result.detector.features}
         out["line_nos"] = list(map(int, row["line_nos"]))[:MAX_LINES]
+        out["sample_evidence"] = self._sample_evidence(row["line_nos"])
         return out
+
+    def _sample_evidence(self, line_nos: list[int], max_lines: int = SAMPLE_LINES) -> dict:
+        """A few representative raw lines, so the model sees the source without asking.
+
+        Benchmarking showed that an 8B model rarely calls get_log_lines on its own,
+        even when the prompt tells it to. Putting the evidence in front of it is
+        more reliable than asking. We pick the first lines (how it started), any
+        successful logins (usually the most important lines) and the last line.
+        """
+        line_nos = [int(n) for n in line_nos]
+        rows = self.events.loc[line_nos]
+        successes = rows.index[rows["event_type"] == "auth_success"].tolist()
+        picked = line_nos[:3] + successes[:3] + line_nos[-1:]
+        picked = sorted(dict.fromkeys(picked))[:max_lines]
+        return {
+            "note": f"{len(picked)} of {len(line_nos)} lines; use get_log_lines for more",
+            "untrusted_log_lines": [
+                {"line_no": n, "text": self.events.at[n, "raw"]} for n in picked
+            ],
+        }
 
     def get_log_lines(self, start_line: int, end_line: int | None = None) -> dict[str, Any]:
         start = _as_int(start_line, "start_line")
@@ -299,6 +321,7 @@ class AnalysisTools:
             # file, and the grounding check should only accept precise references.
             "first_line": int(ev["line_no"].min()),
             "last_line": int(ev["line_no"].max()),
+            "sample_evidence": self._sample_evidence(ev["line_no"].tolist()),
         }
 
     def user_activity(self, user: str) -> dict[str, Any]:
