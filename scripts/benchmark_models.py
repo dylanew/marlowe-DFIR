@@ -43,6 +43,11 @@ def main() -> None:
     parser.add_argument("models", nargs="+")
     parser.add_argument("--out", default="data/processed/model_benchmark.csv")
     parser.add_argument(
+        "--audit",
+        default="data/processed/benchmark_audit.jsonl",
+        help="full record of every answer (tool calls, both attempts, grounding)",
+    )
+    parser.add_argument(
         "--retries", type=int, default=1, help="grounding retries per answer (0 = off)"
     )
     args = parser.parse_args()
@@ -58,7 +63,9 @@ def main() -> None:
         client = OllamaClient(model=model)
         for question in QUESTIONS:
             # A fresh Analyst per question, so earlier answers can't help later ones.
-            analyst = Analyst(client, AnalysisTools(result), max_retries=args.retries)
+            analyst = Analyst(
+                client, AnalysisTools(result), max_retries=args.retries, audit_path=args.audit
+            )
             start = time.perf_counter()
             try:
                 answer = analyst.ask(question)
@@ -82,6 +89,9 @@ def main() -> None:
                     "cited_lines": len(answer.verification.cited_lines),
                     "hit_step_limit": answer.hit_step_limit,
                     "mentions_top_ip": top_ip in answer.text,
+                    # For error analysis: which tools, in order, and why grounding failed.
+                    "tools_used": " > ".join(c.name for c in answer.tool_calls),
+                    "grounding": answer.verification.summary(),
                     "error": "",
                 }
             )
@@ -107,6 +117,12 @@ def main() -> None:
     summary["errors"] = df.groupby("model")["error"].apply(lambda e: int((e != "").sum()))
     print("\n" + summary.round(2).to_string())
     print(f"\nPer-question results: {args.out}")
+    print(f"Full answers and tool calls: {args.audit}")
+    failed = ok[~ok["grounded"].astype(bool)]
+    for _, row in failed.iterrows():
+        print(f"\nFAILED [{row['model']}] {row['question']}")
+        print(f"  tools: {row['tools_used'] or 'none'}")
+        print(f"  {row['grounding']}")
 
 
 if __name__ == "__main__":

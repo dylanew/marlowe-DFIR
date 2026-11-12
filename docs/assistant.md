@@ -81,7 +81,14 @@ The script asks 5 fixed questions per model and records latency, tool calls, gro
 | Model | Version | Median s/answer | Mean tool calls | Saw raw evidence | First-try grounded | Final grounded | Notes |
 |---|---|---|---|---|---|---|---|
 | llama3.1:8b | step 3 (prompt only) | 22.4 | 1.2 | 0.0 | 0.6 (3 of 5) | 0.6 (3 of 5) | M4 MacBook Air, 16 GB, temperature 0; 5.0–36.6 s per answer |
-| llama3.1:8b | step 3b (sample evidence + retry) | *to run* | | | | | |
+| llama3.1:8b | step 3b, sample evidence only (`--retries 0`) | 16.9 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | |
+| llama3.1:8b | step 3b, sample evidence + 1 retry | 25.0 | 1.2 | 0.2 | 0.6 (3 of 5) | 0.6 (3 of 5) | same 2 questions failed; retry did not fix them |
+
+**Step 3b result: no measurable improvement.** The same two questions failed in every configuration. Two things the numbers show:
+- **Sample evidence rarely reaches the model** (1 answer in 5). With about 1.2 tool calls per question, the model mostly stops after `get_overview` or `list_findings`, and neither of those returns raw lines. The evidence was added to the tools the model *doesn't* call.
+- **The retry runs but doesn't fix the answer.** For the failing questions it took a few seconds longer with a retry than without, so the model was asked again and produced another ungrounded answer.
+
+The benchmark now writes every answer, tool sequence and grounding failure to `data/processed/benchmark_audit.jsonl` and prints the failures, so the next change can be based on *why* those two questions fail rather than on a guess.
 
 Use `--retries 0` to measure the effect of sample evidence alone, without retries.
 
