@@ -281,8 +281,11 @@ with ask:
             with st.chat_message(entry["role"]):
                 st.markdown(entry["text"])
                 if entry["role"] == "assistant":
-                    if entry["passed"]:
+                    status = entry.get("status", "verified" if entry["passed"] else "failed")
+                    if status == "verified":
                         st.success(entry["check"], icon="✅")
+                    elif status == "general":
+                        st.info(entry["check"], icon="💬")
                     else:
                         st.error(entry["check"], icon="⚠️")
                     if entry["retried"]:
@@ -292,7 +295,7 @@ with ask:
 
         # Input first, then the conversation newest-first, so the box stays at the
         # top and the latest answer is always right under it.
-        prompt = "Ask about the evidence, e.g. 'Was there a brute-force attack?'"
+        prompt = "Ask about the evidence, or anything security, e.g. 'What should I do first?'"
         question = st.chat_input(prompt)
         if question:
             show({"role": "user", "text": question})
@@ -314,6 +317,7 @@ with ask:
                     "role": "assistant",
                     "text": a.text,
                     "passed": a.verification.passed,
+                    "status": a.verification.status,
                     "check": a.verification.summary(),
                     "retried": bool(a.retries),
                     "tools": [f"{c.name}({json.dumps(c.arguments)})" for c in a.tool_calls],

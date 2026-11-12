@@ -41,6 +41,11 @@ _RANGE = r"\d+(?:\s*[-–]\s*\d+)?"
 _CITATION = re.compile(rf"\blines?\s+({_RANGE}(?:\s*(?:,|and|&)\s*{_RANGE})*)", re.IGNORECASE)
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE)
+_FINDING_REF = re.compile(r"\bF\d{1,3}\b")
+# The prompt asks general answers to say so in these words. Requiring the
+# label means an unlabelled, uncited claim ("It was a brute force attack.")
+# still fails rather than slipping through as "general".
+_GENERAL_LABEL = re.compile(r"\bgeneral guidance\b", re.IGNORECASE)
 
 # A citation wider than this must sit inside one range a tool returned (a
 # finding's window). Otherwise "[lines 1-539]" would pass simply because every
@@ -79,6 +84,9 @@ class Verification:
     too_wide_citations: list[str] = field(default_factory=list)
     # Values a tool confirmed are NOT in the evidence and the answer says so.
     reported_absent: list[str] = field(default_factory=list)
+    # True if the answer is labelled as general guidance and names nothing
+    # from the evidence (no citations, IPs, hashes or finding IDs).
+    general: bool = False
 
     @property
     def absence_answer(self) -> bool:
@@ -96,7 +104,19 @@ class Verification:
             and not self.wrong_hashes
         )
 
+    @property
+    def status(self) -> str:
+        """ "verified", "general" (makes no evidence claims) or "failed"."""
+        if self.passed:
+            return "verified"
+        return "general" if self.general else "failed"
+
     def summary(self) -> str:
+        if self.status == "general":
+            return (
+                "General answer: it names nothing from this evidence, so there was nothing "
+                "to verify. Treat it as general guidance."
+            )
         if self.passed and self.absence_answer:
             return (
                 "Grounding check passed: the answer reports that "
@@ -260,6 +280,13 @@ def verify_answer(
     # An IP a tool confirmed is absent may be named, to say it is absent.
     known_ips = set(tools.events["src_ip"].dropna().unique()) | absent
     v.unknown_ips = sorted({ip for ip in _IPV4.findall(text) if ip not in known_ips})
+    v.general = bool(_GENERAL_LABEL.search(text)) and not (
+        v.has_citations
+        or v.reported_absent
+        or _IPV4.search(text)
+        or _SHA256.search(text)
+        or _FINDING_REF.search(text)
+    )
 
     sha = tools.result.evidence.sha256.lower()
     v.wrong_hashes = sorted({h for h in _SHA256.findall(text) if h.lower() != sha})
@@ -362,7 +389,8 @@ class Analyst:
         # Verify, then retry: a failed grounding check goes back to the model
         # once, with the specific problems. The corrective note is labelled as
         # coming from the evidence checker, not from the investigator.
-        while not verification.passed and not hit_limit and retries < self.max_retries:
+        # A general answer (nothing from the evidence) has nothing to fix.
+        while verification.status == "failed" and not hit_limit and retries < self.max_retries:
             retries += 1
             self.history.append({"role": "user", "content": _retry_message(verification)})
             text, more_steps, hit_limit = self._run_tools_loop(records)
@@ -418,6 +446,7 @@ class Analyst:
             "first_attempt_answer": answer.first_attempt_text or None,
             "saw_raw_evidence": answer.saw_raw_evidence,
             "grounding_passed": answer.verification.passed,
+            "grounding_status": answer.verification.status,
             "grounding": asdict(answer.verification),
         }
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)

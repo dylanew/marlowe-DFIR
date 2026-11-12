@@ -361,3 +361,42 @@ def test_absence_wording_is_required(analysis):
     )
     answer = Analyst(client, AnalysisTools(analysis)).ask("What did 10.9.9.9 do?")
     assert not answer.verification.passed
+
+
+def test_general_question_gets_a_neutral_status_without_tools(analysis, tmp_path):
+    text = (
+        "A password spray tries one or two common passwords against many accounts, "
+        "staying under lockout thresholds.\n\nGeneral guidance, not drawn from this evidence."
+    )
+    audit = tmp_path / "audit.jsonl"
+    answer = Analyst(FakeClient([final(text)]), AnalysisTools(analysis), audit_path=audit).ask(
+        "What is a password spray?"
+    )
+    v = answer.verification
+    assert v.status == "general" and not v.passed
+    assert answer.retries == 0  # nothing to fix, so no retry
+    assert "General answer" in v.summary()
+    assert json.loads(audit.read_text())["grounding_status"] == "general"
+
+
+def test_general_label_does_not_excuse_evidence_claims(analysis):
+    """Naming an IP or finding makes it an evidence answer, label or not."""
+    tools = AnalysisTools(analysis)
+    ip = tools.get_finding("F1")["src_ip"]
+    v = verify_answer(f"{ip} is the attacker. General guidance.", tools, set())
+    assert v.status == "failed"
+    v = verify_answer("F1 is bad. General guidance.", tools, set())
+    assert v.status == "failed"
+
+
+def test_unlabelled_uncited_claim_still_fails(analysis):
+    v = verify_answer("It was a brute force attack.", AnalysisTools(analysis), set())
+    assert v.status == "failed"
+
+
+def test_prompt_allows_general_questions_but_keeps_evidence_rules():
+    from marlowe.assistant.prompts import SYSTEM_PROMPT
+
+    assert "General guidance, not drawn from this evidence." in SYSTEM_PROMPT
+    assert "Never guess IP addresses" in SYSTEM_PROMPT
+    assert "conversational overview" in SYSTEM_PROMPT

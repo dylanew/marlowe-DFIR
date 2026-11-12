@@ -66,6 +66,18 @@ Each answer is followed by the tools the model called and the result of the grou
 | Bugs disguised as "tool errors" | Only expected problems (`ToolError`, invalid arguments) go back to the model. Anything else raises, so it gets fixed. |
 | Accountability | Every question, the tool calls and their arguments, the answer and the grounding result go to an append-only audit log (`data/processed/assistant_audit.jsonl`) with the model name and prompt version. |
 
+### Three outcomes, not two
+
+Marlowe also answers general questions ("what is a password spray?", "how should I harden sshd?"), which have nothing to cite. So every answer gets one of three statuses:
+
+| Status | When | Shown as |
+|---|---|---|
+| **verified** | Every cited line, IP and hash checks out, or the answer reports that something the investigator asked about isn't in the evidence, as a tool confirmed | green |
+| **general** | The answer ends with "General guidance, not drawn from this evidence." **and** names nothing from the evidence: no citations, IPs, hashes or finding IDs | neutral |
+| **failed** | Anything else, such as an uncited claim like "It was a brute force attack." | red; retried once |
+
+The label is required on purpose. Without it, an evidence question answered from thin air would look exactly like a general answer. With it, an unlabelled, uncited claim still fails and goes back to the model. A model can still mislabel an answer, so the neutral badge says plainly that the answer was not checked against the evidence.
+
 **What the grounding check does not do:** it confirms that cited evidence *exists and was seen*, not that the model *interpreted* it correctly. An answer can cite real lines and still draw a wrong conclusion. That is why the investigator stays in the loop.
 
 ## The noir persona
