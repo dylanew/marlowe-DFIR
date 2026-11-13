@@ -57,7 +57,7 @@ An optional noir voice for the assistant, in tone only, with the evidence sectio
 - The on/off persona becomes a five-level slider, 0 Plain to 4 Full noir. The rules are identical at every level (tested), so only the voice varies
 - A dose-response benchmark (`--levels 0 1 2 3 4`): grounding, correctness on known facts, and how much voice each answer actually has, with Wilson 95% intervals
 - Result on llama3.1:8b: no invented evidence at any level, but completeness failures rise with the slider (0, 0, 1, 1, 2 of 8; trend p ≈ 0.07), so final grounding falls from 1.00 to 0.75 at full noir. See `docs/assistant.md`
-- Next: repeat the completeness rule in the persona guardrails (persona v3) and rerun levels 0, 2 and 4
+- Persona v3 repeats the completeness rule in every voice's guardrails; rerun of levels 0, 2 and 4 pending
 
 ## Step 4: Portfolio presentation
 

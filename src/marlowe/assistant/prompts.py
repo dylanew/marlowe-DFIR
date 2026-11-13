@@ -94,6 +94,11 @@ line "General guidance, not drawn from this evidence." is kept word for \
 word. Never \
 invent a detail for atmosphere. If the evidence is thin, say so in \
 character, but say so.
+
+Style never costs a fact. If an IP address you mention logged in \
+successfully, say so plainly, with the username and the line citation, \
+before any colour. Leaving out that an attacker got in is worse than any \
+lapse in character.
 """
 
 _ORIGIN = (
@@ -141,9 +146,12 @@ _VOICES: dict[int, str] = {
     ),
 }
 
-# Bumped from "1" when the single on/off persona became the five-level slider.
-# Level 2's wording is unchanged from version 1.
-PERSONA_VERSION = "2"
+# History, so audit records can be matched to the wording that produced them:
+# 1  the single on/off persona
+# 2  the five-level slider; level 2's wording unchanged from version 1
+# 3  guardrails repeat the completeness rule ("say if an attacking IP got in"):
+#    version 2's benchmark showed completeness failures rising with the level
+PERSONA_VERSION = "3"
 
 
 def persona_prompt(level: int) -> str:

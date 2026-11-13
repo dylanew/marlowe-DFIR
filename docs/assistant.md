@@ -99,7 +99,7 @@ Design choices:
 - **Tone only.** The persona may colour the short answer and the interpretation. The evidence section stays plain: citations, IPs, usernames, timestamps and counts are written exactly as the tools returned them.
 - **Same rules at every level.** Each voice is appended after an identical rules prompt and repeats that the rules win. A test checks this, so a difference between levels can only come from the voice. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
 - **Original voice.** The prompt asks for the style, not quotations from the novels.
-- **Measured, not assumed.** The audit log records `persona_level` and `PERSONA_VERSION` (2 since the slider; level 2's wording is unchanged from version 1).
+- **Measured, not assumed.** The audit log records `persona_level` and `PERSONA_VERSION`: 2 for the slider (level 2's voice unchanged from version 1), and 3 since the guardrails repeat the completeness rule. `--from-audit` only uses voiced answers from the current version unless you pass `--persona-version`.
 
 ### Benchmarking the slider
 
@@ -127,7 +127,7 @@ Rates come with Wilson 95% intervals. With 8 questions, one answer is 12 percent
 
 The voice measures are crude text statistics, not a judgement of the writing. That is deliberate: they are transparent, deterministic and unit tested, which an LLM judge would not be.
 
-### Results: llama3.1:8b
+### Results: llama3.1:8b, persona v2
 
 M4 MacBook Air, 16 GB, temperature 0, 1 retry. Run partly with `--resume` and rebuilt with `--from-audit`. 39 of 40 answers came back: one level 1 question ("Is finding F2 likely to be malicious?") timed out twice, at 300 s and 600 s (see below). Answers took about 1.5 to 8 minutes each. Level 4's median was 164 s; levels 0 to 3 were logged before latency went into the audit log, and their printed medians were 116 s (level 0) and 132 s (level 1).
 
@@ -149,7 +149,30 @@ What it shows:
 - **The dose stayed small.** The voice score rises with the slider, but almost all of that is first person. Similes stay near zero and level 3 scored below level 2. llama3.1:8b mostly ignored the stronger voices, so even a small amount of character showed a measurable completeness cost.
 - **The timeout looks like a runaway reply, not slowness.** At this machine's speed, 600 s is several thousand tokens for one reply, against a few hundred in a normal answer, and at temperature 0 it fails the same way every time. Replies are now capped at 1024 tokens (`max_tokens`, Ollama's `num_predict`; `--max-tokens` on the benchmark), so a stuck reply ends and gets graded instead of hanging.
 
-**Decision for now:** keep level 2 as the web app's default. It's the character the project is built around, and its one failure is the kind the completeness check catches and flags in the app. The next experiment is to add "say whether an attacking IP logged in" to the persona guardrails (`PERSONA_VERSION` 3) and rerun levels 0, 2 and 4, to see whether the completeness gap closes.
+**Decision for now:** keep level 2 as the web app's default. It's the character the project is built around, and its one failure is the kind the completeness check catches and flags in the app.
+
+### Follow-up: persona v3, repeating the completeness rule
+
+Hypothesis: the persona's guardrails repeat the rule against invention but not the one about completeness, so a strong voice keeps the first and lets the second slip. Persona v3 adds one paragraph to every voice's guardrails, after the existing ones:
+
+> Style never costs a fact. If an IP address you mention logged in successfully, say so plainly, with the username and the line citation, before any colour. Leaving out that an attacker got in is worse than any lapse in character.
+
+Nothing else changed: the rules prompt, the voices, the questions and the checks are all as in v2. Level 0 has no persona, so it's rerun only as a same-day control. At temperature 0 it should match v2 closely; if it doesn't, the comparison is noisier than it looks.
+
+```bash
+python scripts/benchmark_models.py llama3.1:8b --levels 0 2 4 \
+    --out data/processed/bench_persona_v3.csv --audit data/processed/bench_persona_v3_audit.jsonl
+```
+
+What would count as the rule working: completeness failures at levels 2 and 4 back to 0 or near it, with the voice score not falling. A voice score that drops would mean the rule worked by suppressing the character, which is a different result.
+
+Results (to be filled in from a live run):
+
+| Level | n | First-try grounded | Final grounded | Correct | Completeness failures | Voice score | Median s |
+|---|---|---|---|---|---|---|---|
+| 0 Plain (control) | | | | | | | |
+| 2 Marlowe | | | | | | | |
+| 4 Full noir | | | | | | | |
 
 ## Choosing a model
 

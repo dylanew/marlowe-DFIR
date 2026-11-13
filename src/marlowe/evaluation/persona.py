@@ -284,6 +284,7 @@ def rows_from_audit(
     facts: dict[str, str],
     questions: Iterable[BenchmarkQuestion] = QUESTIONS,
     since: str | None = None,
+    persona_version: str | None = None,
 ) -> pd.DataFrame:
     """Rebuild benchmark rows from the audit log, without asking the model again.
 
@@ -292,7 +293,9 @@ def rows_from_audit(
     a ``persona_level`` (written since the slider), match a benchmark question
     and, if ``since`` is given (ISO time, UTC), were written at or after it.
     Where a question was answered more than once at a level, the latest answer
-    wins. Records from before latency was logged have an empty ``seconds``.
+    wins. With ``persona_version``, voiced answers (level 1 and up)
+    from other persona wordings are left out; level 0 has no persona, so it
+    always counts. Records from before latency was logged have an empty ``seconds``.
     """
     from marlowe.assistant.agent import Answer, ToolCallRecord, Verification
 
@@ -306,6 +309,9 @@ def rows_from_audit(
             continue
         if since and rec.get("time_utc", "") < since:
             continue
+        voiced = rec["persona_level"] > 0
+        if persona_version and voiced and rec.get("persona_version") != persona_version:
+            continue  # a voice written by a different persona wording
         latest[(rec["model"], rec["persona_level"], rec["question"])] = rec
 
     rows = []
@@ -328,6 +334,7 @@ def rows_from_audit(
                 "model": model,
                 "persona_level": level,
                 "repeat": 0,
+                "persona_version": rec.get("persona_version"),
                 # Recorded in the audit log since it was added; NaN for older records.
                 "seconds": float("nan") if rec.get("seconds") is None else rec["seconds"],
                 **score_answer(by_text[text], answer, facts),

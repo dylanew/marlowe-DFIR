@@ -46,7 +46,7 @@ from pathlib import Path
 import pandas as pd
 
 from marlowe.assistant import AnalysisTools, Analyst, OllamaClient
-from marlowe.assistant.prompts import DEFAULT_PERSONA_LEVEL, PERSONA_LEVELS
+from marlowe.assistant.prompts import DEFAULT_PERSONA_LEVEL, PERSONA_LEVELS, PERSONA_VERSION
 from marlowe.evaluation.persona import (
     QUESTIONS,
     PersonaBenchmark,
@@ -131,11 +131,19 @@ def main() -> None:
         help="don't ask the model: rebuild --out from the answers in --audit",
     )
     parser.add_argument(
+        "--persona-version",
+        default=PERSONA_VERSION,
+        help="with --from-audit, only voiced answers from this persona wording "
+        f"(default {PERSONA_VERSION}, the current one; 'any' for all)",
+    )
+    parser.add_argument(
         "--since",
         help="with --from-audit, only answers logged at or after this UTC time, "
         "e.g. 2026-11-12T21:00",
     )
     args = parser.parse_args()
+    if args.persona_version == "any":
+        args.persona_version = None
 
     if args.list_questions:
         for i, q in enumerate(QUESTIONS, 1):
@@ -161,7 +169,9 @@ def main() -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if args.from_audit:
-        df = rows_from_audit(args.audit, facts, questions, since=args.since)
+        df = rows_from_audit(
+            args.audit, facts, questions, since=args.since, persona_version=args.persona_version
+        )
         df = df[df["model"].isin(args.models) & df["persona_level"].isin(args.levels)]
         if df.empty:
             raise SystemExit(f"No slider answers for those models and levels in {args.audit}")
@@ -211,7 +221,13 @@ def main() -> None:
         bench = PersonaBenchmark(
             make_analyst, facts, questions=questions, on_row=report, done=done_keys(earlier)
         )
-        bench.run(args.levels, repeats=args.repeats, model=model, temperature=args.temperature)
+        bench.run(
+            args.levels,
+            repeats=args.repeats,
+            model=model,
+            temperature=args.temperature,
+            persona_version=PERSONA_VERSION,
+        )
 
     _finish(pd.DataFrame(rows), out, args.audit)
 

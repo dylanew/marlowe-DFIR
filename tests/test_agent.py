@@ -290,7 +290,7 @@ def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
     plain.ask("q")
     voiced.ask("q")
     records = [json.loads(line) for line in audit.read_text().splitlines()]
-    assert [r["persona_version"] for r in records] == [None, "2"]
+    assert [r["persona_version"] for r in records] == [None, "3"]
     assert [r["persona_level"] for r in records] == [0, 2]
 
 
@@ -309,12 +309,23 @@ def test_every_slider_level_keeps_the_same_rules():
         assert "Never invent a detail for atmosphere" in text.replace("\n", " ")
 
 
-def test_level_2_is_the_original_persona_word_for_word():
+def test_level_2_keeps_the_original_voice():
     from marlowe.assistant.prompts import PERSONA_PROMPT, persona_prompt
 
     assert persona_prompt(2) == PERSONA_PROMPT
     assert PERSONA_PROMPT.startswith("Voice: you take your name from the hard-boiled")
     assert "one or two touches of character per answer, not a pastiche" in PERSONA_PROMPT
+
+
+def test_every_voice_repeats_the_completeness_rule():
+    """Persona v2's benchmark: answers left out that an attacker logged in more
+    often as the voice got stronger. v3 repeats that rule in every voice."""
+    from marlowe.assistant.prompts import PERSONA_LEVELS, persona_prompt
+
+    for level in list(PERSONA_LEVELS)[1:]:
+        text = persona_prompt(level).replace("\n", " ")
+        assert "logged in successfully, say so plainly" in text
+        assert text.index("never overrides the rules") < text.index("Style never costs a fact")
 
 
 def test_persona_level_is_validated(analysis):

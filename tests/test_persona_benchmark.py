@@ -230,3 +230,23 @@ def test_results_rebuilt_from_the_audit_log_match_the_live_run(analysis, tmp_pat
     )
     assert rebuilt["seconds"].notna().all()  # latency is in the audit log
     assert rows_from_audit(audit, facts, since="2999-01-01").empty
+
+
+def test_audit_rebuild_keeps_persona_versions_apart(analysis, tmp_path):
+    from marlowe.assistant.prompts import PERSONA_VERSION
+
+    audit = tmp_path / "audit.jsonl"
+    tools = AnalysisTools(analysis)
+    ip = tools.findings.iloc[0]["src_ip"]
+    facts = {"top_ip": ip, "top_user": "root"}
+    PersonaBenchmark(
+        lambda level: Analyst(
+            VoicedFakeLLM(level, analysis), AnalysisTools(analysis), persona=level, audit_path=audit
+        ),
+        facts,
+    ).run([0, 2], model="fake-voiced")
+
+    current = rows_from_audit(audit, facts, persona_version=PERSONA_VERSION)
+    assert sorted(current["persona_level"].unique()) == [0, 2]
+    older = rows_from_audit(audit, facts, persona_version="2")
+    assert list(older["persona_level"].unique()) == [0]  # level 0 has no persona to differ
