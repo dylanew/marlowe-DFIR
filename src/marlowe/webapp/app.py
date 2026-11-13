@@ -25,6 +25,7 @@ import streamlit as st
 
 from marlowe.assistant import AnalysisTools, Analyst, OllamaClient, OllamaError
 from marlowe.assistant.ollama import DEFAULT_MODEL, DEFAULT_URL
+from marlowe.assistant.prompts import DEFAULT_PERSONA_LEVEL, PERSONA_LEVELS
 from marlowe.pipeline import AnalysisResult, analyse_auth_log
 from marlowe.synthetic import generate_auth_log
 from marlowe.webapp import effects, views
@@ -111,11 +112,14 @@ with st.sidebar:
         model = st.selectbox("Model", models, index=default)
 
     st.divider()
-    noir = st.toggle(
-        "Noir voice",
-        value=True,
-        help="Marlowe answers in the voice of a 1930s private eye. Tone only: "
-        "evidence, citations and the grounding check are unchanged.",
+    persona_level = st.select_slider(
+        "Personality",
+        options=list(PERSONA_LEVELS),
+        value=DEFAULT_PERSONA_LEVEL,
+        format_func=PERSONA_LEVELS.get,
+        help="How much of the 1930s private eye comes through, from a plain assistant "
+        "to full noir. Tone only: evidence, citations and the grounding check are the "
+        "same at every level. Changing it starts a new conversation.",
     )
     atmosphere = st.toggle("Atmosphere", value=True, help="Occasional drifting smoke.")
 
@@ -266,13 +270,13 @@ with ask:
     if models is None and "chat_client" not in st.session_state:
         st.info("Start Ollama and reload the page to ask questions.")
     else:
-        key = (evidence.evidence_id, model, noir)
+        key = (evidence.evidence_id, model, persona_level)
         if st.session_state.get("analyst_key") != key:
             st.session_state.analyst = Analyst(
                 get_client(model, ollama_url),
                 AnalysisTools(result),
                 audit_path=AUDIT,
-                persona=noir,
+                persona=persona_level,
             )
             st.session_state.analyst_key = key
             st.session_state.chat = []

@@ -276,6 +276,7 @@ def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
 
     assert system_prompt() == SYSTEM_PROMPT
     noir = system_prompt(persona=True)
+    assert noir == system_prompt(2)  # the old on/off switch means level 2
     assert noir.startswith(SYSTEM_PROMPT)  # rules first, voice after
     assert "never overrides the rules" in noir
 
@@ -289,7 +290,55 @@ def test_persona_is_opt_in_and_keeps_the_rules(analysis, tmp_path):
     plain.ask("q")
     voiced.ask("q")
     records = [json.loads(line) for line in audit.read_text().splitlines()]
-    assert [r["persona_version"] for r in records] == [None, "1"]
+    assert [r["persona_version"] for r in records] == [None, "3"]
+    assert [r["persona_level"] for r in records] == [0, 2]
+
+
+def test_every_slider_level_keeps_the_same_rules():
+    """Only the voice varies across the slider, so a benchmark across levels
+    measures the voice and nothing else."""
+    from marlowe.assistant.prompts import PERSONA_LEVELS, SYSTEM_PROMPT, system_prompt
+
+    prompts = [system_prompt(level) for level in PERSONA_LEVELS]
+    assert prompts[0] == SYSTEM_PROMPT
+    assert len(set(prompts)) == len(prompts)  # every level says something different
+    for text in prompts[1:]:
+        assert text.startswith(SYSTEM_PROMPT)
+        assert "never overrides the rules" in text
+        assert '"General guidance, not drawn from this evidence."' in text
+        assert "Never invent a detail for atmosphere" in text.replace("\n", " ")
+
+
+def test_level_2_keeps_the_original_voice():
+    from marlowe.assistant.prompts import PERSONA_PROMPT, persona_prompt
+
+    assert persona_prompt(2) == PERSONA_PROMPT
+    assert PERSONA_PROMPT.startswith("Voice: you take your name from the hard-boiled")
+    assert "one or two touches of character per answer, not a pastiche" in PERSONA_PROMPT
+
+
+def test_every_voice_repeats_the_completeness_rule():
+    """Persona v2's benchmark: answers left out that an attacker logged in more
+    often as the voice got stronger. v3 repeats that rule in every voice."""
+    from marlowe.assistant.prompts import PERSONA_LEVELS, persona_prompt
+
+    for level in list(PERSONA_LEVELS)[1:]:
+        text = persona_prompt(level).replace("\n", " ")
+        assert "logged in successfully, say so plainly" in text
+        assert text.index("never overrides the rules") < text.index("Style never costs a fact")
+
+
+def test_persona_level_is_validated(analysis):
+    import pytest
+
+    from marlowe.assistant.prompts import system_prompt
+
+    for bad in (-1, 5):
+        with pytest.raises(ValueError):
+            system_prompt(bad)
+        with pytest.raises(ValueError):
+            Analyst(FakeClient([]), AnalysisTools(analysis), persona=bad)
+    assert Analyst(FakeClient([]), AnalysisTools(analysis), persona=4).persona_level == 4
 
 
 def test_wide_citation_must_match_a_block_a_tool_returned(analysis):

@@ -22,7 +22,7 @@ Every finding Marlowe reports should trace back to a computed result and the sou
 | EDA and evaluation notebook | Done |
 | Local LLM analyst via Ollama: read-only tools, line citations, grounding check, audit log | Done, tested; benchmarked on llama3.1:8b |
 | Web app (Streamlit): overview, findings drill-down, timeline charts, chat with grounding badge | Done, tested headlessly |
-| Noir persona (tone only, switchable) and noir theme | Done, tested; persona benchmark pending |
+| Personality slider (plain assistant to full noir, tone only) and noir theme | Done, tested; benchmarked: no invented evidence at any level; a completeness gap at high levels was found and closed by persona v3 (see `docs/assistant.md`) |
 
 ## Quick start
 
@@ -81,7 +81,7 @@ The Findings tab lists every flagged window with the reasons from both detectors
 
 ![Timeline tab](docs/img/web-timeline.png)
 
-Two switches in the sidebar: **Noir voice** has Marlowe answer like a 1930s Los Angeles private eye (in tone only: citations, IPs and counts stay exact and the grounding check is unchanged), and **Atmosphere** turns on a faint bank of smoke that drifts across the page about once a minute. While Marlowe works, a curl of smoke rises from a cigarette ember. Both animations are pure CSS, never block clicks, and switch off if your OS is set to reduce motion. On the command line, add `--noir` to `marlowe chat`.
+In the sidebar, the **Personality** slider sets how much of a 1930s Los Angeles private eye comes through, from **Plain** (a neutral assistant) through **Dry**, **Marlowe** (the default), and **Hard-boiled** to **Full noir**. It changes tone only: citations, IPs and counts stay exact and the grounding check is the same at every level. **Atmosphere** turns on a faint bank of smoke that drifts across the page about once a minute. While Marlowe works, a curl of smoke rises from a cigarette ember. Both animations are pure CSS, never block clicks, and switch off if your OS is set to reduce motion. On the command line, add `--persona 0`–`4` to `marlowe chat` (`--noir` is short for `--persona 2`).
 
 ### Use the library
 

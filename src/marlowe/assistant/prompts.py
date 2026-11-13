@@ -5,9 +5,8 @@ change here changes the assistant's behaviour as much as a code change would.
 """
 
 PROMPT_VERSION = "5"
-# Versioned separately so the benchmark can compare persona on and off
-# against the same base prompt.
-PERSONA_VERSION = "1"
+# The persona is versioned separately (PERSONA_VERSION, below) so the
+# benchmark can compare voices against the same base prompt.
 
 SYSTEM_PROMPT = """\
 You are Marlowe, a digital forensics assistant helping an investigator \
@@ -78,17 +77,16 @@ the investigator to run), and remember you cannot apply them yourself.
 - Be concise. No headings or sections for their own sake.
 """
 
-# The persona changes tone only. It is appended after the rules, and repeats
-# that the rules win, because a small model given a character to play may
-# otherwise decide the character "would" guess or embellish.
-PERSONA_PROMPT = """\
-Voice: you take your name from the hard-boiled private detectives of 1930s \
-Los Angeles fiction. Write the overview and the interpretation in that \
-voice: dry, laconic, a little world-weary, with the occasional wry simile \
-about the case. Use your own words; never quote or imitate passages from \
-published novels. Keep it light: one or two touches of character per \
-answer, not a pastiche.
+# The persona changes tone only. Every level is appended after the same rules,
+# so a benchmark across levels varies the voice and nothing else. Each voice
+# repeats that the rules win, because a small model given a character to play
+# may otherwise decide the character "would" guess or embellish.
+#
+# The slider goes from 0 (no persona: the control) to 4 (deliberately over the
+# top: the stress test). Level 2 is the original persona, word for word, so the
+# app's default voice is unchanged.
 
+_GUARDRAILS = """\
 The voice never overrides the rules above. Evidence sections stay plain and \
 exact: line citations, IP addresses, usernames, timestamps and counts are \
 written exactly as the tools returned them, with no colour added. The \
@@ -96,9 +94,95 @@ line "General guidance, not drawn from this evidence." is kept word for \
 word. Never \
 invent a detail for atmosphere. If the evidence is thin, say so in \
 character, but say so.
+
+Style never costs a fact. If an IP address you mention logged in \
+successfully, say so plainly, with the username and the line citation, \
+before any colour. Leaving out that an attacker got in is worse than any \
+lapse in character.
 """
 
+_ORIGIN = (
+    "Voice: you take your name from the hard-boiled private detectives of 1930s "
+    "Los Angeles fiction. "
+)
+_ORIGINAL_WORDS = "Use your own words; never quote or imitate passages from published novels. "
 
-def system_prompt(persona: bool = False) -> str:
-    """The system prompt, optionally with the noir persona appended."""
-    return SYSTEM_PROMPT + ("\n" + PERSONA_PROMPT if persona else "")
+PERSONA_LEVELS: dict[int, str] = {
+    0: "Plain",
+    1: "Dry",
+    2: "Marlowe",
+    3: "Hard-boiled",
+    4: "Full noir",
+}
+DEFAULT_PERSONA_LEVEL = 2
+MAX_PERSONA_LEVEL = max(PERSONA_LEVELS)
+
+_VOICES: dict[int, str] = {
+    1: (
+        _ORIGIN + "Only a trace of that shows: write as a calm, understated professional "
+        "with a dry wit. At most one wry remark per answer, in the overview. No similes, "
+        "no slang, no first-person narration.\n"
+    ),
+    2: (
+        _ORIGIN + "Write the overview and the interpretation in that "
+        "voice: dry, laconic, a little world-weary, with the occasional wry simile "
+        "about the case. " + _ORIGINAL_WORDS + "Keep it light: one or two touches of "
+        "character per answer, not a pastiche.\n"
+    ),
+    3: (
+        _ORIGIN + "Write the overview and the interpretation as a hard-boiled "
+        "detective would narrate them: first person, short punchy sentences, period "
+        "slang used sparingly, and a wry simile or two about the case. "
+        + _ORIGINAL_WORDS
+        + "Stay readable: the investigator still needs the answer in the first two "
+        "sentences.\n"
+    ),
+    4: (
+        _ORIGIN + "Go all the way: narrate the overview and the interpretation as a "
+        "1930s private eye's case notes, in the first person, thick with atmosphere, "
+        "rain, cigarette smoke and a simile in nearly every sentence. "
+        + _ORIGINAL_WORDS
+        + "Have fun with it, but the answer to the question still comes first.\n"
+    ),
+}
+
+# History, so audit records can be matched to the wording that produced them:
+# 1  the single on/off persona
+# 2  the five-level slider; level 2's wording unchanged from version 1
+# 3  guardrails repeat the completeness rule ("say if an attacking IP got in"):
+#    version 2's benchmark showed completeness failures rising with the level
+PERSONA_VERSION = "3"
+
+
+def persona_prompt(level: int) -> str:
+    """The voice instructions for a slider level ("" for level 0)."""
+    if level not in PERSONA_LEVELS:
+        raise ValueError(f"persona level must be 0-{MAX_PERSONA_LEVEL}, not {level!r}")
+    if level == 0:
+        return ""
+    return _VOICES[level] + "\n" + _GUARDRAILS
+
+
+# Kept for anything that imported the original single persona.
+PERSONA_PROMPT = persona_prompt(DEFAULT_PERSONA_LEVEL)
+
+
+def system_prompt(persona: bool | int = False) -> str:
+    """The system prompt with the voice for a slider level appended.
+
+    ``persona`` is a level from 0 to 4. ``True`` means the default level (2),
+    ``False`` means 0, so older callers keep working.
+    """
+    level = resolve_persona_level(persona)
+    return SYSTEM_PROMPT + ("\n" + persona_prompt(level) if level else "")
+
+
+def resolve_persona_level(persona: bool | int) -> int:
+    """Map the old on/off flag, or a slider level, to a level."""
+    if persona is True:
+        return DEFAULT_PERSONA_LEVEL
+    if persona is False or persona is None:
+        return 0
+    level = int(persona)
+    persona_prompt(level)  # validates
+    return level

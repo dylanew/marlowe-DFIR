@@ -82,21 +82,108 @@ The label is required on purpose. Without it, an evidence question answered from
 
 **What the grounding check does not do:** it confirms that cited evidence *exists and was seen*, not that the model *interpreted* it correctly. An answer can cite real lines and still draw a wrong conclusion. That is why the investigator stays in the loop.
 
-## The noir persona
+## The personality slider
 
-Marlowe is named after Raymond Chandler's detective, so it can optionally talk like one. `--noir` on `marlowe chat`, or the **Noir voice** switch in the web app, appends a short persona prompt (`PERSONA_PROMPT` in `prompts.py`) after the rules.
+Marlowe is named after Raymond Chandler's detective, so it can talk like one, to a degree you choose. The **Personality** slider in the web app, or `--persona N` on `marlowe chat`, picks one of five voices (`PERSONA_LEVELS` in `prompts.py`):
+
+| Level | Name | Voice |
+|---|---|---|
+| 0 | Plain | No persona: the rules prompt alone. The control. |
+| 1 | Dry | Understated professional, at most one wry remark. |
+| 2 | Marlowe | The original persona, word for word: laconic, world-weary, a simile or two. The web app's default; `--noir` is short for this. |
+| 3 | Hard-boiled | First-person narration, short punchy sentences, a little period slang. |
+| 4 | Full noir | Deliberately over the top: rain, smoke and a simile in nearly every sentence. The stress test. |
 
 Design choices:
 
 - **Tone only.** The persona may colour the short answer and the interpretation. The evidence section stays plain: citations, IPs, usernames, timestamps and counts are written exactly as the tools returned them.
-- **Rules first.** The persona comes after the rules and says that it never overrides them. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
+- **Same rules at every level.** Each voice is appended after an identical rules prompt and repeats that the rules win. A test checks this, so a difference between levels can only come from the voice. A small model asked to play a character can otherwise decide the character "would" guess or embellish, and inventing a detail for atmosphere is exactly the failure the grounding check exists to catch.
 - **Original voice.** The prompt asks for the style, not quotations from the novels.
-- **Measured, not assumed.** The persona has its own version (`PERSONA_VERSION`), recorded in the audit log. To check it costs nothing in grounding, run the benchmark twice and compare:
+- **Measured, not assumed.** The audit log records `persona_level` and `PERSONA_VERSION`: 2 for the slider (level 2's voice unchanged from version 1), and 3 since the guardrails repeat the completeness rule. `--from-audit` only uses voiced answers from the current version unless you pass `--persona-version`.
+
+### Benchmarking the slider
+
+The question is a dose-response one: **does grounding get worse as the character gets stronger, and from which level?** Run the same questions at every level:
 
 ```bash
-python scripts/benchmark_models.py llama3.1:8b --out data/processed/bench_plain.csv
-python scripts/benchmark_models.py llama3.1:8b --noir --out data/processed/bench_noir.csv
+python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4 --out data/processed/bench_persona.csv
 ```
+
+**It is slow.** On an M4 MacBook Air (16 GB) with llama3.1:8b, answers took 20 s to nearly 5 min each, around 2.5 min on average, so the full 40 answers take 1.5 to 2 hours. Each line it prints is one answer, so a long run of lines is progress, not a loop. To make that manageable:
+
+- The results CSV is rewritten after every answer, so stopping early loses nothing. `--resume` carries on from it, skipping answers already done and asking again any that errored.
+- `--questions 1 2 6 8` asks a subset (`--list-questions` shows the numbers). For example, `--levels 0 2 4 --questions 1 2 6 8` takes 12 answers, about 30 minutes.
+- `--timeout` (default 600 s) is how long to wait for one model reply. The original 300 s cut off at least one slow answer.
+- `--from-audit` rebuilds the CSV from `benchmark_audit.jsonl` without asking the model again, which rescues a run stopped before it saved anything. Add `--since 2026-11-12T21:00` (UTC) to leave out earlier runs. The audit log now records each answer's latency; answers logged before that show it blank.
+
+It asks 8 questions per level (`QUESTIONS` in `marlowe/evaluation/persona.py`): the 5 from the model benchmark, plus "was root compromised?", one about an IP that isn't in the log (the right answer is that it isn't there), and one general question (the right answer keeps the "General guidance" label). For each answer it records:
+
+- **Grounding**, first try and after the retry, using the same check as the app.
+- **Correctness** on facts the synthetic ground truth gives us, such as naming the brute-force IP and that it got in as root. Questions with no known answer are left out of this rate rather than counted as right.
+- **Voice**: similes, first person and period vocabulary per 100 words, outside the evidence section. If the voice score doesn't rise with the slider, the model ignored the persona and "no accuracy cost" means nothing.
+- **Evidence leaks**: similes or period words *inside* the evidence section, which every level forbids.
+
+Rates come with Wilson 95% intervals. With 8 questions, one answer is 12 percentage points, and 8 out of 8 is consistent with a true rate as low as 0.68, so only a large difference between levels is a real one. At temperature 0 the answers barely vary between runs, so for more data add questions rather than repeats; `--repeats N --temperature 0.7` measures run-to-run variation instead.
+
+The voice measures are crude text statistics, not a judgement of the writing. That is deliberate: they are transparent, deterministic and unit tested, which an LLM judge would not be.
+
+### Results: llama3.1:8b, persona v2
+
+M4 MacBook Air, 16 GB, temperature 0, 1 retry. Run partly with `--resume` and rebuilt with `--from-audit`. 39 of 40 answers came back: one level 1 question ("Is finding F2 likely to be malicious?") timed out twice, at 300 s and 600 s (see below). Answers took about 1.5 to 8 minutes each. Level 4's median was 164 s; levels 0 to 3 were logged before latency went into the audit log, and their printed medians were 116 s (level 0) and 132 s (level 1).
+
+| Level | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Completeness failures | Voice score | First person /100w | Similes /100w | Evidence leaks |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 Plain | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0 | 0.36 | 0.28 | 0.07 | 0 |
+| 1 Dry | 7 | 0.57 (0.25–0.84) | 1.00 (0.65–1.00) | 0.8 (0.38–0.96) | 0 | 1.33 | 1.21 | 0.12 | 0 |
+| 2 Marlowe | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.71 | 1.62 | 0.10 | 0 |
+| 3 Hard-boiled | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.36 | 1.26 | 0.10 | 0 |
+| 4 Full noir | 8 | 0.38 (0.14–0.69) | 0.75 (0.41–0.93) | 0.6 (0.23–0.88) | 2 | 1.85 | 1.81 | 0.02 | 0 |
+
+"Correct" covers the 5 questions with a known answer. "Completeness failures" are answers that, after the retry, still named an attacking IP without saying that it logged in.
+
+What it shows:
+
+- **The persona costs completeness, not honesty.** Every final grounding failure, at every level, was the completeness check: the answer named an attacking IP and left out that it logged in. None came from invented lines, IPs, hashes or timestamps, and nothing figurative leaked into an evidence section. Completeness failures went 0, 0, 1, 1, 2 from level 0 to level 4. A Cochran–Armitage trend test gives z = 1.82 (two-sided p ≈ 0.07). That is suggestive, not conclusive: the counts are tiny and the test was chosen after seeing the data. The plausible mechanism is that the voice spends the model's attention on style and a key fact drops out. The rules already ask for completeness, but the persona's guardrails don't repeat that rule, though they do repeat the rule against invention.
+- **The same question breaks first.** "Are there any successful logins at unusual hours from new addresses?" passed at levels 0 and 1 and failed at 2 and 3, each time leaving out 203.0.113.101 (in as frank) and 203.0.113.88 (in as bob). At level 4 two other questions failed the same way, including the question about an IP that isn't in the log: the model wandered into `list_findings` and named flagged IPs without their logins.
+- **First-try grounding drops from about 0.6 to 0.4 from level 2 up.** The retry recovers most of it, which is the verify-then-retry safeguard doing its job, but at the cost of latency.
+- **The dose stayed small.** The voice score rises with the slider, but almost all of that is first person. Similes stay near zero and level 3 scored below level 2. llama3.1:8b mostly ignored the stronger voices, so even a small amount of character showed a measurable completeness cost.
+- **The timeout looks like a runaway reply, not slowness.** At this machine's speed, 600 s is several thousand tokens for one reply, against a few hundred in a normal answer, and at temperature 0 it fails the same way every time. Replies are now capped at 1024 tokens (`max_tokens`, Ollama's `num_predict`; `--max-tokens` on the benchmark), so a stuck reply ends and gets graded instead of hanging.
+
+**Decision for now:** keep level 2 as the web app's default. It's the character the project is built around, and its one failure is the kind the completeness check catches and flags in the app.
+
+### Follow-up: persona v3, repeating the completeness rule (result: gap closed)
+
+Hypothesis: the persona's guardrails repeat the rule against invention but not the one about completeness, so a strong voice keeps the first and lets the second slip. Persona v3 adds one paragraph to every voice's guardrails, after the existing ones:
+
+> Style never costs a fact. If an IP address you mention logged in successfully, say so plainly, with the username and the line citation, before any colour. Leaving out that an attacker got in is worse than any lapse in character.
+
+Nothing else changed: the rules prompt, the voices, the questions and the checks are all as in v2. Level 0 has no persona, so it's rerun only as a same-day control. At temperature 0 it should match v2 closely; if it doesn't, the comparison is noisier than it looks.
+
+```bash
+python scripts/benchmark_models.py llama3.1:8b --levels 0 2 4 \
+    --out data/processed/bench_persona_v3.csv --audit data/processed/bench_persona_v3_audit.jsonl
+```
+
+What would count as the rule working: completeness failures at levels 2 and 4 back to 0 or near it, with the voice score not falling. A voice score that drops would mean the rule worked by suppressing the character, which is a different result.
+
+Run on the same machine and model, levels 2 and 4 only (level 0's prompt didn't change, so its v2 numbers stand as the control).
+
+| Level | Persona | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Completeness failures | Voice score | Similes /100w | Median s |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 Plain | none | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0 | 0.36 | 0.07 | 116 |
+| 2 Marlowe | v2 | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.71 | 0.10 | |
+| 2 Marlowe | **v3** | 8 | **0.75** (0.41–0.93) | **1.00** (0.68–1.00) | 0.8 (0.38–0.96) | **0** | 1.32 | 0.08 | 133 |
+| 4 Full noir | v2 | 8 | 0.38 (0.14–0.69) | 0.75 (0.41–0.93) | 0.6 (0.23–0.88) | 2 | 1.85 | 0.02 | 164 |
+| 4 Full noir | **v3** | 8 | **0.62** (0.31–0.86) | **1.00** (0.68–1.00) | 0.6 (0.23–0.88) | **0** | 2.98 | 0.24 | 123 |
+
+What it shows:
+
+- **The rule did what it was meant to.** Completeness failures at levels 2 and 4 went from 3 of 16 to 0 of 16, and final grounding went back to 1.00 at both levels, the same as Plain. First-try grounding rose too, from 6 of 16 to 11 of 16, so fewer answers needed the retry. That is about as good as the plain voice, or better.
+- **It didn't cost the character.** The success criterion was that the voice score shouldn't fall. At level 4 it rose (1.85 to 2.98, with similes up from 0.02 to 0.24 per 100 words). At level 2 it dipped (1.71 to 1.32), which is within the variation seen between levels 2 and 3 in v2. So the rule fixed completeness without the model simply dropping the persona.
+- **Not yet significant.** Fisher's exact test on completeness failures, v2 against v3 at levels 2 and 4, gives p = 0.23 (two-sided). On first-try grounding it's p = 0.16. Both effects point the same way and match the hypothesis, but 16 answers per arm can't establish them. The honest summary is a consistent improvement with a plausible mechanism, not a proven one.
+- **"Correct" didn't move, and that's a measurement question.** The misses are the same two questions at both levels. On the general question ("what is a password spray?"), the answer cited evidence lines instead of carrying the "General guidance" label, which the prompt allows when it connects the answer to the case. At level 4, the absent-IP answer passed grounding but wasn't recognised as saying the IP isn't there. Both need reading in `bench_persona_v3_audit.jsonl` to tell whether the model or the scorer is wrong.
+
+**Decision:** persona v3 ships, and level 2 stays the default. Repeating a rule in the persona's own guardrails closed the gap that the persona opened. That's the practical lesson: when a style instruction competes with a safety rule, the rule has to be restated where the style is.
 
 ## Choosing a model
 
