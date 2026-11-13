@@ -62,5 +62,5 @@ An optional noir voice for the assistant, in tone only, with the evidence sectio
 
 ## Step 4: Portfolio presentation
 
-- Methodology write-up, architecture diagram, screenshots, short demo
+- Project write-up (done: [writeup.md](writeup.md)); still to do: architecture diagram, short demo
 - Decide whether a second data source (network flows, e.g. CIC-IDS2017) is worth adding

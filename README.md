@@ -4,6 +4,8 @@ Marlowe-DFIR is a locally hosted, AI-assisted digital forensics and cybersecurit
 
 > **Status:** early development. Evidence provenance and an end-to-end SSH `auth.log` anomaly-detection pipeline (parser, features, rule baseline, Isolation Forest, evaluation) are in place and tested, and a local LLM analyst (Ollama) can explain the findings using read-only tools, with every answer checked against the evidence. See [docs/roadmap.md](docs/roadmap.md).
 
+**New here?** [The project write-up](docs/writeup.md) tells the story in one page: the design, what the evidence checks catch and miss, and what the personality slider benchmark found.
+
 ## Design principle
 
 **The LLM explains; deterministic code extracts, calculates and verifies.**
@@ -117,6 +119,7 @@ docs/                 setup, architecture and roadmap
 
 ## Documentation
 
+- [Project write-up: design, results and lessons](docs/writeup.md)
 - [Setup, including local LLM install](docs/setup.md)
 - [Architecture and design decisions](docs/architecture.md)
 - [Methodology, results and limitations](docs/methodology.md)
