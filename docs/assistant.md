@@ -151,7 +151,7 @@ What it shows:
 
 **Decision for now:** keep level 2 as the web app's default. It's the character the project is built around, and its one failure is the kind the completeness check catches and flags in the app.
 
-### Follow-up: persona v3, repeating the completeness rule
+### Follow-up: persona v3, repeating the completeness rule (result: gap closed)
 
 Hypothesis: the persona's guardrails repeat the rule against invention but not the one about completeness, so a strong voice keeps the first and lets the second slip. Persona v3 adds one paragraph to every voice's guardrails, after the existing ones:
 
@@ -166,13 +166,24 @@ python scripts/benchmark_models.py llama3.1:8b --levels 0 2 4 \
 
 What would count as the rule working: completeness failures at levels 2 and 4 back to 0 or near it, with the voice score not falling. A voice score that drops would mean the rule worked by suppressing the character, which is a different result.
 
-Results (to be filled in from a live run):
+Run on the same machine and model, levels 2 and 4 only (level 0's prompt didn't change, so its v2 numbers stand as the control).
 
-| Level | n | First-try grounded | Final grounded | Correct | Completeness failures | Voice score | Median s |
-|---|---|---|---|---|---|---|---|
-| 0 Plain (control) | | | | | | | |
-| 2 Marlowe | | | | | | | |
-| 4 Full noir | | | | | | | |
+| Level | Persona | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Completeness failures | Voice score | Similes /100w | Median s |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 Plain | none | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0 | 0.36 | 0.07 | 116 |
+| 2 Marlowe | v2 | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.71 | 0.10 | |
+| 2 Marlowe | **v3** | 8 | **0.75** (0.41–0.93) | **1.00** (0.68–1.00) | 0.8 (0.38–0.96) | **0** | 1.32 | 0.08 | 133 |
+| 4 Full noir | v2 | 8 | 0.38 (0.14–0.69) | 0.75 (0.41–0.93) | 0.6 (0.23–0.88) | 2 | 1.85 | 0.02 | 164 |
+| 4 Full noir | **v3** | 8 | **0.62** (0.31–0.86) | **1.00** (0.68–1.00) | 0.6 (0.23–0.88) | **0** | 2.98 | 0.24 | 123 |
+
+What it shows:
+
+- **The rule did what it was meant to.** Completeness failures at levels 2 and 4 went from 3 of 16 to 0 of 16, and final grounding went back to 1.00 at both levels, the same as Plain. First-try grounding rose too, from 6 of 16 to 11 of 16, so fewer answers needed the retry. That is about as good as the plain voice, or better.
+- **It didn't cost the character.** The success criterion was that the voice score shouldn't fall. At level 4 it rose (1.85 to 2.98, with similes up from 0.02 to 0.24 per 100 words). At level 2 it dipped (1.71 to 1.32), which is within the variation seen between levels 2 and 3 in v2. So the rule fixed completeness without the model simply dropping the persona.
+- **Not yet significant.** Fisher's exact test on completeness failures, v2 against v3 at levels 2 and 4, gives p = 0.23 (two-sided). On first-try grounding it's p = 0.16. Both effects point the same way and match the hypothesis, but 16 answers per arm can't establish them. The honest summary is a consistent improvement with a plausible mechanism, not a proven one.
+- **"Correct" didn't move, and that's a measurement question.** The misses are the same two questions at both levels. On the general question ("what is a password spray?"), the answer cited evidence lines instead of carrying the "General guidance" label, which the prompt allows when it connects the answer to the case. At level 4, the absent-IP answer passed grounding but wasn't recognised as saying the IP isn't there. Both need reading in `bench_persona_v3_audit.jsonl` to tell whether the model or the scorer is wrong.
+
+**Decision:** persona v3 ships, and level 2 stays the default. Repeating a rule in the persona's own guardrails closed the gap that the persona opened. That's the practical lesson: when a style instruction competes with a safety rule, the rule has to be restated where the style is.
 
 ## Choosing a model
 

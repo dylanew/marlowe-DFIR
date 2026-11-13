@@ -52,12 +52,13 @@ A Streamlit app (`marlowe web`) over the same pipeline and assistant: overview w
 
 An optional noir voice for the assistant, in tone only, with the evidence section kept plain. Versioned separately (`PERSONA_VERSION`, recorded in the audit log) so it can be benchmarked and the personality shown not to cost accuracy. The web app also gets a noir theme and CSS smoke effects.
 
-## Step 3f: Personality slider and its benchmark (done; follow-up experiment next)
+## Step 3f: Personality slider and its benchmark (done)
 
 - The on/off persona becomes a five-level slider, 0 Plain to 4 Full noir. The rules are identical at every level (tested), so only the voice varies
 - A dose-response benchmark (`--levels 0 1 2 3 4`): grounding, correctness on known facts, and how much voice each answer actually has, with Wilson 95% intervals
 - Result on llama3.1:8b: no invented evidence at any level, but completeness failures rise with the slider (0, 0, 1, 1, 2 of 8; trend p ≈ 0.07), so final grounding falls from 1.00 to 0.75 at full noir. See `docs/assistant.md`
-- Persona v3 repeats the completeness rule in every voice's guardrails; rerun of levels 0, 2 and 4 pending
+- Persona v3 repeats the completeness rule in every voice's guardrails. Rerun: completeness failures at levels 2 and 4 went from 3 of 16 to 0, final grounding back to 1.00, voice kept (p = 0.23, so consistent but not yet significant)
+- Open: check whether the two remaining "correct" misses (the general-question label, the absent IP at level 4) are model or scorer errors
 
 ## Step 4: Portfolio presentation
 
