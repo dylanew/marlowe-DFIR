@@ -228,5 +228,5 @@ def test_results_rebuilt_from_the_audit_log_match_the_live_run(analysis, tmp_pat
     pd.testing.assert_frame_equal(
         rebuilt[cols].reset_index(drop=True), live[cols].reset_index(drop=True), check_dtype=False
     )
-    assert rebuilt["seconds"].isna().all()  # latency isn't in the audit log
+    assert rebuilt["seconds"].notna().all()  # latency is in the audit log
     assert rows_from_audit(audit, facts, since="2999-01-01").empty

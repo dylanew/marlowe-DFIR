@@ -114,7 +114,7 @@ python scripts/benchmark_models.py llama3.1:8b --levels 0 1 2 3 4 --out data/pro
 - The results CSV is rewritten after every answer, so stopping early loses nothing. `--resume` carries on from it, skipping answers already done and asking again any that errored.
 - `--questions 1 2 6 8` asks a subset (`--list-questions` shows the numbers). For example, `--levels 0 2 4 --questions 1 2 6 8` takes 12 answers, about 30 minutes.
 - `--timeout` (default 600 s) is how long to wait for one model reply. The original 300 s cut off at least one slow answer.
-- `--from-audit` rebuilds the CSV from `benchmark_audit.jsonl` without asking the model again, which rescues a run stopped before it saved anything. Add `--since 2026-11-12T21:00` (UTC) to leave out earlier runs. Latency isn't in the audit log, so it's left blank.
+- `--from-audit` rebuilds the CSV from `benchmark_audit.jsonl` without asking the model again, which rescues a run stopped before it saved anything. Add `--since 2026-11-12T21:00` (UTC) to leave out earlier runs. The audit log now records each answer's latency; answers logged before that show it blank.
 
 It asks 8 questions per level (`QUESTIONS` in `marlowe/evaluation/persona.py`): the 5 from the model benchmark, plus "was root compromised?", one about an IP that isn't in the log (the right answer is that it isn't there), and one general question (the right answer keeps the "General guidance" label). For each answer it records:
 
@@ -127,15 +127,26 @@ Rates come with Wilson 95% intervals. With 8 questions, one answer is 12 percent
 
 The voice measures are crude text statistics, not a judgement of the writing. That is deliberate: they are transparent, deterministic and unit tested, which an LLM judge would not be.
 
-Results (to be filled in from a live run):
+### Results: llama3.1:8b, first run
 
-| Model | Level | First-try grounded | Final grounded | Correct | Voice score | Evidence leaks | Median s |
-|---|---|---|---|---|---|---|---|
-| llama3.1:8b | 0 Plain | | | | | | |
-| llama3.1:8b | 1 Dry | | | | | | |
-| llama3.1:8b | 2 Marlowe | | | | | | |
-| llama3.1:8b | 3 Hard-boiled | | | | | | |
-| llama3.1:8b | 4 Full noir | | | | | | |
+M4 MacBook Air, 16 GB, temperature 0, 1 retry. The run was stopped during level 4 and rebuilt with `--from-audit`, so level 1 has 7 answers (one timed out at the old 300 s limit) and level 4 has 4. Answers took about 2 to 4 minutes each. Medians from the printed log were 116 s at level 0 and 132 s at level 1; this run predates latency in the audit log, so the table has no latency column.
+
+| Level | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Voice score | First person /100w | Similes /100w | Evidence leaks |
+|---|---|---|---|---|---|---|---|---|
+| 0 Plain | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0.36 | 0.28 | 0.07 | 0 |
+| 1 Dry | 7 | 0.57 (0.25–0.84) | 1.00 (0.65–1.00) | 0.8 (0.38–0.96) | 1.33 | 1.21 | 0.12 | 0 |
+| 2 Marlowe | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1.71 | 1.62 | 0.10 | 0 |
+| 3 Hard-boiled | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1.36 | 1.26 | 0.10 | 0 |
+| 4 Full noir | 4 | 0.50 (0.15–0.85) | 1.00 (0.51–1.00) | 1.0 (0.34–1.00) | 2.28 | 2.28 | 0.00 | 0 |
+
+What it shows:
+
+- **No significant cost, but a weak experiment.** Final grounding stayed at 0.88 or above at every level, and no figurative language leaked into an evidence section. Every interval overlaps the others, though, so a cost of 20 to 30 points could still be hiding in this sample.
+- **The dose was small.** The voice score rises with the slider, but almost all of that is first person ("I'd say..."). Similes stay near zero and level 3 scored *below* level 2. llama3.1:8b mostly ignored the stronger voices, so this tests "a bit of character", not "full noir". A model that follows style instructions more closely would be a fairer test of level 4.
+- **First-try grounding dips from about 0.6 to 0.4 at levels 2 and 3.** The retry rescued most of those, which is the verify-then-retry safeguard doing its job. The dip is within noise for now.
+- **The one recurring failure is a completeness failure, and only with a persona.** "Are there any successful logins at unusual hours from new addresses?" failed at levels 2 and 3 after the retry, both times for the same reason: it listed logins but left out that two attacking IPs got in (203.0.113.101 as frank, 203.0.113.88 as bob). The same question passed at levels 0 and 1. This is the most interesting lead: a voice may crowd out completeness rather than cause invention, and the completeness check is what caught it.
+
+Next: finish level 4 and the timed-out level 1 answer (`--resume`), then read those two failed answers in the audit log and decide whether the completeness rule needs repeating in the persona's guardrails.
 
 ## Choosing a model
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -186,6 +187,7 @@ class Answer:
     first_attempt_passed: bool = True
     first_attempt_text: str = ""
     saw_raw_evidence: bool = False
+    seconds: float | None = None  # wall-clock time for the whole answer, retries included
 
 
 def _parse_ranges(spec: str) -> list[tuple[int, int]]:
@@ -440,6 +442,7 @@ class Analyst:
     def ask(self, question: str) -> Answer:
         self.history.append({"role": "user", "content": question})
         self._question = question
+        started = time.perf_counter()
         records: list[ToolCallRecord] = []
         self._saw_raw_evidence = False
         self._tool_errors: list[str] = []
@@ -472,6 +475,7 @@ class Analyst:
             first_attempt_passed=first_passed,
             first_attempt_text=first_text if retries else "",
             saw_raw_evidence=self._saw_raw_evidence,
+            seconds=round(time.perf_counter() - started, 1),
         )
         self._audit(answer)
         self._n_ok_before += self._n_ok
@@ -505,6 +509,7 @@ class Analyst:
             "persona_level": self.persona_level,
             "persona_name": PERSONA_LEVELS[self.persona_level],
             "question": answer.question,
+            "seconds": answer.seconds,
             "tool_calls": [asdict(c) for c in answer.tool_calls],
             "answer": answer.text,
             "retries": answer.retries,

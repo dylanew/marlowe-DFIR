@@ -22,7 +22,7 @@ Every finding Marlowe reports should trace back to a computed result and the sou
 | EDA and evaluation notebook | Done |
 | Local LLM analyst via Ollama: read-only tools, line citations, grounding check, audit log | Done, tested; benchmarked on llama3.1:8b |
 | Web app (Streamlit): overview, findings drill-down, timeline charts, chat with grounding badge | Done, tested headlessly |
-| Personality slider (plain assistant to full noir, tone only) and noir theme | Done, tested; benchmark across levels built, live results pending |
+| Personality slider (plain assistant to full noir, tone only) and noir theme | Done, tested; first benchmark: no significant grounding cost (see `docs/assistant.md`) |
 
 ## Quick start
 

@@ -292,7 +292,7 @@ def rows_from_audit(
     a ``persona_level`` (written since the slider), match a benchmark question
     and, if ``since`` is given (ISO time, UTC), were written at or after it.
     Where a question was answered more than once at a level, the latest answer
-    wins. Latency is not in the audit log, so ``seconds`` is left empty.
+    wins. Records from before latency was logged have an empty ``seconds``.
     """
     from marlowe.assistant.agent import Answer, ToolCallRecord, Verification
 
@@ -328,7 +328,8 @@ def rows_from_audit(
                 "model": model,
                 "persona_level": level,
                 "repeat": 0,
-                "seconds": float("nan"),
+                # Recorded in the audit log since it was added; NaN for older records.
+                "seconds": float("nan") if rec.get("seconds") is None else rec["seconds"],
                 **score_answer(by_text[text], answer, facts),
                 "error": "",
             }
