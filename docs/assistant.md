@@ -127,26 +127,29 @@ Rates come with Wilson 95% intervals. With 8 questions, one answer is 12 percent
 
 The voice measures are crude text statistics, not a judgement of the writing. That is deliberate: they are transparent, deterministic and unit tested, which an LLM judge would not be.
 
-### Results: llama3.1:8b, first run
+### Results: llama3.1:8b
 
-M4 MacBook Air, 16 GB, temperature 0, 1 retry. The run was stopped during level 4 and rebuilt with `--from-audit`, so level 1 has 7 answers (one timed out at the old 300 s limit) and level 4 has 4. Answers took about 2 to 4 minutes each. Medians from the printed log were 116 s at level 0 and 132 s at level 1; this run predates latency in the audit log, so the table has no latency column.
+M4 MacBook Air, 16 GB, temperature 0, 1 retry. Run partly with `--resume` and rebuilt with `--from-audit`. 39 of 40 answers came back: one level 1 question ("Is finding F2 likely to be malicious?") timed out twice, at 300 s and 600 s (see below). Answers took about 1.5 to 8 minutes each. Level 4's median was 164 s; levels 0 to 3 were logged before latency went into the audit log, and their printed medians were 116 s (level 0) and 132 s (level 1).
 
-| Level | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Voice score | First person /100w | Similes /100w | Evidence leaks |
-|---|---|---|---|---|---|---|---|---|
-| 0 Plain | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0.36 | 0.28 | 0.07 | 0 |
-| 1 Dry | 7 | 0.57 (0.25–0.84) | 1.00 (0.65–1.00) | 0.8 (0.38–0.96) | 1.33 | 1.21 | 0.12 | 0 |
-| 2 Marlowe | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1.71 | 1.62 | 0.10 | 0 |
-| 3 Hard-boiled | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1.36 | 1.26 | 0.10 | 0 |
-| 4 Full noir | 4 | 0.50 (0.15–0.85) | 1.00 (0.51–1.00) | 1.0 (0.34–1.00) | 2.28 | 2.28 | 0.00 | 0 |
+| Level | n | First-try grounded (95% CI) | Final grounded (95% CI) | Correct (95% CI) | Completeness failures | Voice score | First person /100w | Similes /100w | Evidence leaks |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 Plain | 8 | 0.62 (0.31–0.86) | 1.00 (0.68–1.00) | 1.0 (0.57–1.00) | 0 | 0.36 | 0.28 | 0.07 | 0 |
+| 1 Dry | 7 | 0.57 (0.25–0.84) | 1.00 (0.65–1.00) | 0.8 (0.38–0.96) | 0 | 1.33 | 1.21 | 0.12 | 0 |
+| 2 Marlowe | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.71 | 1.62 | 0.10 | 0 |
+| 3 Hard-boiled | 8 | 0.38 (0.14–0.69) | 0.88 (0.53–0.98) | 0.8 (0.38–0.96) | 1 | 1.36 | 1.26 | 0.10 | 0 |
+| 4 Full noir | 8 | 0.38 (0.14–0.69) | 0.75 (0.41–0.93) | 0.6 (0.23–0.88) | 2 | 1.85 | 1.81 | 0.02 | 0 |
+
+"Correct" covers the 5 questions with a known answer. "Completeness failures" are answers that, after the retry, still named an attacking IP without saying that it logged in.
 
 What it shows:
 
-- **No significant cost, but a weak experiment.** Final grounding stayed at 0.88 or above at every level, and no figurative language leaked into an evidence section. Every interval overlaps the others, though, so a cost of 20 to 30 points could still be hiding in this sample.
-- **The dose was small.** The voice score rises with the slider, but almost all of that is first person ("I'd say..."). Similes stay near zero and level 3 scored *below* level 2. llama3.1:8b mostly ignored the stronger voices, so this tests "a bit of character", not "full noir". A model that follows style instructions more closely would be a fairer test of level 4.
-- **First-try grounding dips from about 0.6 to 0.4 at levels 2 and 3.** The retry rescued most of those, which is the verify-then-retry safeguard doing its job. The dip is within noise for now.
-- **The one recurring failure is a completeness failure, and only with a persona.** "Are there any successful logins at unusual hours from new addresses?" failed at levels 2 and 3 after the retry, both times for the same reason: it listed logins but left out that two attacking IPs got in (203.0.113.101 as frank, 203.0.113.88 as bob). The same question passed at levels 0 and 1. This is the most interesting lead: a voice may crowd out completeness rather than cause invention, and the completeness check is what caught it.
+- **The persona costs completeness, not honesty.** Every final grounding failure, at every level, was the completeness check: the answer named an attacking IP and left out that it logged in. None came from invented lines, IPs, hashes or timestamps, and nothing figurative leaked into an evidence section. Completeness failures went 0, 0, 1, 1, 2 from level 0 to level 4. A Cochran–Armitage trend test gives z = 1.82 (two-sided p ≈ 0.07). That is suggestive, not conclusive: the counts are tiny and the test was chosen after seeing the data. The plausible mechanism is that the voice spends the model's attention on style and a key fact drops out. The rules already ask for completeness, but the persona's guardrails don't repeat that rule, though they do repeat the rule against invention.
+- **The same question breaks first.** "Are there any successful logins at unusual hours from new addresses?" passed at levels 0 and 1 and failed at 2 and 3, each time leaving out 203.0.113.101 (in as frank) and 203.0.113.88 (in as bob). At level 4 two other questions failed the same way, including the question about an IP that isn't in the log: the model wandered into `list_findings` and named flagged IPs without their logins.
+- **First-try grounding drops from about 0.6 to 0.4 from level 2 up.** The retry recovers most of it, which is the verify-then-retry safeguard doing its job, but at the cost of latency.
+- **The dose stayed small.** The voice score rises with the slider, but almost all of that is first person. Similes stay near zero and level 3 scored below level 2. llama3.1:8b mostly ignored the stronger voices, so even a small amount of character showed a measurable completeness cost.
+- **The timeout looks like a runaway reply, not slowness.** At this machine's speed, 600 s is several thousand tokens for one reply, against a few hundred in a normal answer, and at temperature 0 it fails the same way every time. Replies are now capped at 1024 tokens (`max_tokens`, Ollama's `num_predict`; `--max-tokens` on the benchmark), so a stuck reply ends and gets graded instead of hanging.
 
-Next: finish level 4 and the timed-out level 1 answer (`--resume`), then read those two failed answers in the audit log and decide whether the completeness rule needs repeating in the persona's guardrails.
+**Decision for now:** keep level 2 as the web app's default. It's the character the project is built around, and its one failure is the kind the completeness check catches and flags in the app. The next experiment is to add "say whether an attacking IP logged in" to the persona guardrails (`PERSONA_VERSION` 3) and rerun levels 0, 2 and 4, to see whether the completeness gap closes.
 
 ## Choosing a model
 

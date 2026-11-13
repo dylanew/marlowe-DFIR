@@ -41,6 +41,7 @@ class OllamaClient:
         timeout: float = 300,
         temperature: float = 0.0,
         num_ctx: int = 8192,
+        max_tokens: int = 1024,
     ):
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
@@ -50,7 +51,10 @@ class OllamaClient:
         # temperature 0: the same question should give the same answer, which
         # matters for reproducibility. num_ctx: context window in tokens; 8k is
         # enough for our bounded tool outputs and modest on memory.
-        self.options = {"temperature": temperature, "num_ctx": num_ctx}
+        # max_tokens (Ollama's num_predict) caps one reply. A real answer is a
+        # few hundred tokens; without a cap, a model stuck repeating itself at
+        # temperature 0 runs until the request times out, every time.
+        self.options = {"temperature": temperature, "num_ctx": num_ctx, "num_predict": max_tokens}
 
     def _request(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode() if payload is not None else None
@@ -66,7 +70,16 @@ class OllamaClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise OllamaError(f"Ollama returned HTTP {exc.code}: {body}") from exc
+        except TimeoutError as exc:
+            raise OllamaError(
+                f"timed out: no reply from Ollama within {self.timeout:g} s. The model may be "
+                "stuck repeating itself; lower max_tokens or raise the timeout."
+            ) from exc
         except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise OllamaError(
+                    f"timed out: no reply from Ollama within {self.timeout:g} s"
+                ) from exc
             raise OllamaError(
                 f"Cannot reach Ollama at {self.base_url} ({exc.reason}). "
                 "Is it running? Try `ollama serve` or open the Ollama app."

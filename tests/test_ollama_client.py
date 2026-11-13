@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -30,6 +31,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         _Handler.received.append(body)
+        if body["model"] == "slow":
+            time.sleep(1)
         if body["model"] == "missing":
             self._send(404, {"error": "model 'missing' not found"})
             return
@@ -67,6 +70,12 @@ def test_chat_request_shape(server):
     assert sent["stream"] is False
     assert sent["tools"] == tools
     assert sent["options"]["temperature"] == 0.0
+    assert sent["options"]["num_predict"] == 1024  # a runaway reply ends instead of hanging
+
+
+def test_timeout_is_a_readable_ollama_error(server):
+    with pytest.raises(OllamaError, match="timed out.*0.2 s"):
+        OllamaClient(model="slow", base_url=server, timeout=0.2).chat([])
 
 
 def test_http_error_is_readable(server):

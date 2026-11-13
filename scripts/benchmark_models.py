@@ -114,6 +114,13 @@ def main() -> None:
         help="seconds to wait for one model reply before giving up (default 600)",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="cap on tokens in one model reply (default 1024), so a reply stuck in a "
+        "loop ends instead of timing out",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="keep the answers already in --out and ask only the missing or failed ones",
@@ -163,8 +170,9 @@ def main() -> None:
 
     earlier = pd.DataFrame()
     if args.resume and out.exists():
-        earlier = pd.read_csv(out)
-        earlier["error"] = earlier["error"].fillna("")
+        # Read "error" as text: when no answer failed it is all blank, which
+        # pandas would otherwise read as a float column of NaN.
+        earlier = pd.read_csv(out, converters={"error": str})
         earlier = earlier[earlier["error"] == ""]  # failed answers are asked again
         print(f"Resuming: {len(earlier)} answers already in {out}")
     rows: list[dict] = earlier.to_dict("records")
@@ -183,7 +191,12 @@ def main() -> None:
         )
 
     for model in args.models:
-        client = OllamaClient(model=model, temperature=args.temperature, timeout=args.timeout)
+        client = OllamaClient(
+            model=model,
+            temperature=args.temperature,
+            timeout=args.timeout,
+            max_tokens=args.max_tokens,
+        )
 
         def make_analyst(level: int, client: OllamaClient = client) -> Analyst:
             # A fresh Analyst per question, so earlier answers can't help later ones.
